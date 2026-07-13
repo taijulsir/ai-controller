@@ -1,3 +1,5 @@
+<!-- This project is under active development; see architecture.md for design details. -->
+
 # AI Controller
 
 An AI Controller that orchestrates Claude Code, Git/GitHub, and Telegram behind a single,
