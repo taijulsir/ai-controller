@@ -70,3 +70,5 @@ Every module exposes its public contract as an interface (`IConfigService`,
 `IRepositoryRegistry`, `IGitAdapter`, `IClaudeAdapter`, `ITaskPlanner`, `IControllerCore`,
 `IApprovalProvider`, `ITelegramClient`, ...) — consumers depend on these, never on
 concrete classes or on YAML/git/claude/Telegram implementation details directly.
+
+Verified end-to-end: real Claude Code CLI plus real Git workflow.
