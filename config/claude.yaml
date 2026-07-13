@@ -9,4 +9,4 @@ execution:
   max_execution_minutes: 30
 
 session:
-  resume_previous: true
+  resume_previous: false
