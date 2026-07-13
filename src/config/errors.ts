@@ -24,3 +24,12 @@ export class ConfigValidationError extends Error {
     this.name = "ConfigValidationError";
   }
 }
+
+export class MissingEnvironmentVariableError extends Error {
+  constructor(filePath: string, variableName: string) {
+    super(
+      `Configuration file "${filePath}" references environment variable "\${${variableName}}", but it is not set. Define it in your environment or in a .env file at the project root.`,
+    );
+    this.name = "MissingEnvironmentVariableError";
+  }
+}

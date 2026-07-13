@@ -10,7 +10,7 @@ See [architecture.md](./architecture.md) for the full module breakdown and desig
 
 ## Requirements
 
-- Node.js 18+ (uses the built-in `fetch` API)
+- Node.js 20.6+ (uses the built-in `fetch` API and `process.loadEnvFile`)
 - The `git` CLI available on `PATH`
 - The `claude` CLI available on `PATH` (for any workflow that calls Claude)
 
@@ -18,10 +18,15 @@ See [architecture.md](./architecture.md) for the full module breakdown and desig
 
 ```bash
 npm install
+cp .env.example .env   # then fill in the real values
 ```
 
-Configuration lives in `config/*.yaml` (see below) — nothing is read from environment
-variables today.
+Configuration lives in `config/*.yaml` (see below). Any YAML value can reference an
+environment variable with `${VARIABLE_NAME}` syntax — e.g. `config/telegram.yaml`'s
+`bot.token: "${TELEGRAM_BOT_TOKEN}"` — which is resolved from `process.env` when the file
+loads, and raises a clear error if the variable isn't set. `src/index.ts` loads `.env` at
+startup if one exists at the project root; `.env` is git-ignored, so real secrets never
+enter version control — only placeholders belong in `.env.example`.
 
 ### Configuration files
 

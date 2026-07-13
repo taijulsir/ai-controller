@@ -1,9 +1,20 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { ControllerCore } from "./controller";
 import { ConfigService } from "./config";
 import { TaskPlanner, WorkflowFactory } from "./planner";
 import { RepositoryRegistry } from "./repositories";
 
+function loadEnvFile(): void {
+  const envFilePath = path.resolve(__dirname, "../.env");
+  if (existsSync(envFilePath)) {
+    process.loadEnvFile(envFilePath);
+  }
+}
+
 function bootstrap(): void {
+  loadEnvFile();
+
   const configService = new ConfigService();
   const repositoryRegistry = new RepositoryRegistry(configService);
   const workflowFactory = new WorkflowFactory(configService, repositoryRegistry);

@@ -1,11 +1,12 @@
 telegram:
-  enabled: false
+  enabled: true
 
 bot:
-  token: ""
+  token: "${TELEGRAM_BOT_TOKEN}"
 
 security:
-  allowed_users: []
+  allowed_users:
+    - "8078199876"
 
 notifications:
   task_started: true
