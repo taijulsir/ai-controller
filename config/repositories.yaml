@@ -1,3 +1,7 @@
-repositories: {}
+repositories:
+  ai-controller:
+    name: AI Controller
+    path: /home/aiagent/workspace/ai-controller
+    default_branch: main
 
-active_repository: null
+active_repository: ai-controller

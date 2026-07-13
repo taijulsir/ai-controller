@@ -7,6 +7,6 @@ export const GitCommand = {
   createBranch: (branch: string): string[] => ["checkout", "-b", branch],
   stageAll: (): string[] => ["add", "-A"],
   commit: (message: string): string[] => ["commit", "-m", message],
-  push: (): string[] => ["push"],
+  push: (): string[] => ["push", "--set-upstream", "origin", "HEAD"],
   pull: (): string[] => ["pull"],
 } as const;
