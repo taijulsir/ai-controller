@@ -25,3 +25,12 @@ export class TaskTimeoutError extends Error {
     this.name = "TaskTimeoutError";
   }
 }
+
+export class PullRequestBaseBranchConflictError extends Error {
+  constructor(branch: string) {
+    super(
+      `Cannot create a pull request from "${branch}" because it is the configured base branch. Check out a feature branch first.`,
+    );
+    this.name = "PullRequestBaseBranchConflictError";
+  }
+}

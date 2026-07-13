@@ -30,6 +30,11 @@ export class CommandParser implements ICommandParser {
       return { type: "create-commit", input: { message: args } };
     },
     push: () => ({ type: "push-changes" }),
+    "create-pr": (args) => {
+      if (!args) throw new CommandParseError('"create-pr" requires a title, e.g. "create-pr Add login flow".');
+      return { type: "create-pull-request", input: { title: args } };
+    },
+    "list-prs": () => ({ type: "list-pull-requests" }),
   };
 
   parse(text: string): ParsedCommand {

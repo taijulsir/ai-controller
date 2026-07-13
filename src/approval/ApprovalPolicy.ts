@@ -12,6 +12,10 @@ export class ApprovalPolicy implements IApprovalPolicy {
       return controllerConfig.approval.require_before_git_push;
     }
 
+    if (task.type === "create-pull-request") {
+      return controllerConfig.approval.require_before_pull_request;
+    }
+
     return false;
   }
 }

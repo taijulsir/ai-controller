@@ -4,7 +4,9 @@ export type TaskType =
   | "implement-feature"
   | "fix-bug"
   | "create-commit"
-  | "push-changes";
+  | "push-changes"
+  | "create-pull-request"
+  | "list-pull-requests";
 
 export interface AnalyzeRepositoryTask {
   type: "analyze-repository";
@@ -35,13 +37,24 @@ export interface PushChangesTask {
   type: "push-changes";
 }
 
+export interface CreatePullRequestTask {
+  type: "create-pull-request";
+  input: { title: string; body?: string; baseBranch?: string };
+}
+
+export interface ListPullRequestsTask {
+  type: "list-pull-requests";
+}
+
 export type Task =
   | AnalyzeRepositoryTask
   | ExplainCodeTask
   | ImplementFeatureTask
   | FixBugTask
   | CreateCommitTask
-  | PushChangesTask;
+  | PushChangesTask
+  | CreatePullRequestTask
+  | ListPullRequestsTask;
 
 export interface TaskExecutionContext {
   repositoryId?: string;

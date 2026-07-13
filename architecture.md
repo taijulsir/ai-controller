@@ -25,7 +25,7 @@
 Strictly acyclic — each layer only depends on the ones before it:
 
 ```
-domain  →  config  →  repositories  →  git, claude  →  planner  →  controller  →  approval, telegram
+domain  →  config  →  repositories  →  git, claude, github  →  planner  →  controller  →  approval, telegram
 ```
 
 - **`domain`** — the shared `Repository` type used by every module above it.
@@ -40,10 +40,19 @@ domain  →  config  →  repositories  →  git, claude  →  planner  →  con
 - **`claude`** — `ClaudeAdapter` runs `execute`/`stream` against the `claude` CLI for a
   repository resolved from `IRepositoryRegistry`, with `{ continue: boolean }` mapping
   directly onto the CLI's own `--continue` flag rather than an invented session concept.
+- **`github`** — `GithubAdapter` runs `pr create`/`pr view`/`pr list` via the `gh` CLI
+  (executable name from `GithubConfig.github.cli`) against a repository resolved from
+  `IRepositoryRegistry`, exactly like `GitAdapter`/`ClaudeAdapter`. `PullRequestMapper` is
+  the one place that turns `gh`'s JSON output into the domain `PullRequestSummary` shape —
+  `GithubAdapter` itself only orchestrates. `github.yaml`'s `pull_request.auto_create` and
+  `auto_merge` are intentionally unread today — this phase only supports explicit
+  create/list actions; automatically opening or merging a PR after a push is a deliberate
+  future extension, not implemented.
 - **`planner`** — `TaskPlanner` dispatches a `Task` (`analyze-repository`, `explain-code`,
-  `implement-feature`, `fix-bug`, `create-commit`, `push-changes`) to one small workflow
-  class per task type, built by `WorkflowFactory`. Enforces `ControllerConfig.task`'s
-  concurrency limit and per-task timeout.
+  `implement-feature`, `fix-bug`, `create-commit`, `push-changes`, `create-pull-request`,
+  `list-pull-requests`) to one small workflow class per task type, built by
+  `WorkflowFactory`. Enforces `ControllerConfig.task`'s concurrency limit and per-task
+  timeout.
 - **`controller`** — `ControllerCore` is the single entry point every future front-end
   calls: resolve the repository, build the planner's execution context, delegate, return
   an `ExecutionResult`.
