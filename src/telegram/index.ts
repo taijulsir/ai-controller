@@ -6,3 +6,4 @@ export { TelegramAdapter } from "./TelegramAdapter";
 export { TelegramApiClient } from "./TelegramApiClient";
 export { TelegramSecurity } from "./TelegramSecurity";
 export { TelegramLongPoller } from "./TelegramLongPoller";
+export { TelegramApprovalProvider } from "./TelegramApprovalProvider";

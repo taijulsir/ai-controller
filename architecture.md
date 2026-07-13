@@ -66,6 +66,9 @@ its own collaborators from other modules.
 
 - **Approval providers** (Telegram inline buttons, a web dashboard, a CLI prompt) are all
   just new `IApprovalProvider` implementations — `ApprovalEngine` doesn't change.
+  `TelegramApprovalProvider` (in `src/telegram/`) is the first one: it tracks pending
+  approvals in memory only, keyed by `correlationId` — a controller restart loses any
+  request that hasn't been approved/rejected yet.
 - **Streaming / progress updates in Telegram**: `ITelegramClient` can grow an
   `editMessage()` method additively; `ClaudeAdapter.stream()` already exists for the
   planner to build a streaming workflow on top of.

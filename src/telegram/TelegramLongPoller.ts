@@ -1,6 +1,6 @@
 import { POLL_ERROR_BACKOFF_MS } from "./TelegramConstants";
 import { describeError, logEvent } from "./TelegramLogger";
-import type { ITelegramAdapter, ITelegramClient, ITelegramTransport } from "./interfaces";
+import type { ITelegramAdapter, ITelegramCallbackHandler, ITelegramClient, ITelegramTransport } from "./interfaces";
 import type { TelegramUpdate } from "./types";
 
 export class TelegramLongPoller implements ITelegramTransport {
@@ -11,6 +11,7 @@ export class TelegramLongPoller implements ITelegramTransport {
   constructor(
     private readonly telegramClient: ITelegramClient,
     private readonly telegramAdapter: ITelegramAdapter,
+    private readonly callbackHandler?: ITelegramCallbackHandler,
   ) {}
 
   async start(): Promise<void> {
@@ -37,8 +38,11 @@ export class TelegramLongPoller implements ITelegramTransport {
 
       for (const update of updates) {
         this.offset = update.updateId + 1;
-        // One failing update must never stop the loop from processing the rest.
-        await this.processUpdate(update);
+        // Fire-and-forget: an update that blocks on something delivered by a
+        // later update (e.g. a task awaiting Telegram approval) must never
+        // stop this loop from fetching the next batch, or it deadlocks against
+        // itself. processUpdate() already catches its own errors below.
+        void this.processUpdate(update);
       }
     }
 
@@ -53,15 +57,20 @@ export class TelegramLongPoller implements ITelegramTransport {
   private async processUpdate(update: TelegramUpdate): Promise<void> {
     const context = {
       updateId: update.updateId,
-      chatId: update.message?.chatId ?? null,
-      userId: update.message?.userId ?? null,
+      chatId: update.message?.chatId ?? update.callbackQuery?.chatId ?? null,
+      userId: update.message?.userId ?? update.callbackQuery?.userId ?? null,
+      kind: update.callbackQuery ? "callback_query" : "message",
     };
 
     logEvent("info", "telegram.update.processing", context);
     const startedAt = Date.now();
 
     try {
-      await this.telegramAdapter.handleUpdate(update);
+      if (update.callbackQuery && this.callbackHandler) {
+        await this.callbackHandler.handleCallback(update.callbackQuery);
+      } else {
+        await this.telegramAdapter.handleUpdate(update);
+      }
       logEvent("info", "telegram.update.processed", { ...context, durationMs: Date.now() - startedAt });
     } catch (error) {
       logEvent("error", "telegram.update.failed", { ...context, error: describeError(error) });

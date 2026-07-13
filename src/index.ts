@@ -1,10 +1,17 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { ApprovalEngine } from "./approval";
 import { ControllerCore } from "./controller";
 import { ConfigService } from "./config";
 import { TaskPlanner, WorkflowFactory } from "./planner";
 import { RepositoryRegistry } from "./repositories";
-import { TelegramAdapter, TelegramApiClient, TelegramLongPoller, TelegramSecurity } from "./telegram";
+import {
+  TelegramAdapter,
+  TelegramApiClient,
+  TelegramApprovalProvider,
+  TelegramLongPoller,
+  TelegramSecurity,
+} from "./telegram";
 
 function loadEnvFile(): void {
   const envFilePath = path.resolve(__dirname, "../.env");
@@ -20,7 +27,7 @@ async function bootstrap(): Promise<void> {
   const repositoryRegistry = new RepositoryRegistry(configService);
   const workflowFactory = new WorkflowFactory(configService, repositoryRegistry);
   const taskPlanner = new TaskPlanner(configService, workflowFactory);
-  const controllerCore = new ControllerCore(repositoryRegistry, taskPlanner);
+  const plainControllerCore = new ControllerCore(repositoryRegistry, taskPlanner);
 
   const controllerConfig = configService.getControllerConfig();
   const repositories = repositoryRegistry.getAllRepositories();
@@ -38,8 +45,10 @@ async function bootstrap(): Promise<void> {
 
   const telegramClient = new TelegramApiClient(configService);
   const telegramSecurity = new TelegramSecurity(configService);
+  const telegramApprovalProvider = new TelegramApprovalProvider(telegramClient, telegramSecurity);
+  const controllerCore = new ApprovalEngine(plainControllerCore, configService, telegramApprovalProvider);
   const telegramAdapter = new TelegramAdapter(controllerCore, telegramSecurity, telegramClient);
-  const poller = new TelegramLongPoller(telegramClient, telegramAdapter);
+  const poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramApprovalProvider);
 
   process.once("SIGINT", () => poller.stop());
   process.once("SIGTERM", () => poller.stop());

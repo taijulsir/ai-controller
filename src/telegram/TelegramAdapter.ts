@@ -9,6 +9,7 @@ import type {
   ITelegramSecurity,
 } from "./interfaces";
 import { ResponseFormatter } from "./ResponseFormatter";
+import { buildTelegramCorrelationId } from "./TelegramCorrelation";
 import type { ParsedCommand, TelegramUpdate } from "./types";
 
 export class TelegramAdapter implements ITelegramAdapter {
@@ -45,7 +46,7 @@ export class TelegramAdapter implements ITelegramAdapter {
     const request: ExecutionRequest = {
       task: parsed.task,
       repositoryId: parsed.repositoryId,
-      correlationId: `telegram:${chatId}:${update.updateId}`,
+      correlationId: buildTelegramCorrelationId(chatId, update.updateId),
     };
 
     try {
