@@ -1,0 +1,13 @@
+telegram:
+  enabled: false
+
+bot:
+  token: ""
+
+security:
+  allowed_users: []
+
+notifications:
+  task_started: true
+  task_completed: true
+  task_failed: true

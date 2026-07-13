@@ -1,0 +1,12 @@
+provider:
+  name: claude
+
+cli:
+  executable: claude
+
+execution:
+  approval_mode: acceptEdits
+  max_execution_minutes: 30
+
+session:
+  resume_previous: true

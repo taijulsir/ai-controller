@@ -1,0 +1,21 @@
+controller:
+  name: Taijul AI Controller
+  version: 1.0.0
+  environment: development
+
+workspace:
+  root: /home/aiagent/projects
+
+task:
+  max_concurrent_jobs: 1
+  timeout_minutes: 30
+
+approval:
+  mode: manual
+  require_before_git_push: true
+  require_before_pull_request: false
+
+logging:
+  enabled: true
+  level: info
+  directory: /home/aiagent/workspace/ai-controller/logs

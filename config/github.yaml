@@ -1,0 +1,9 @@
+github:
+  cli: gh
+
+git:
+  default_branch: main
+
+pull_request:
+  auto_create: true
+  auto_merge: false
