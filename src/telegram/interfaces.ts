@@ -7,6 +7,12 @@ export interface ITelegramAdapter {
 
 export interface ITelegramClient {
   sendMessage(message: OutgoingMessage): Promise<void>;
+  getUpdates(offset?: number, timeoutSeconds?: number, signal?: AbortSignal): Promise<TelegramUpdate[]>;
+}
+
+export interface ITelegramTransport {
+  start(): Promise<void>;
+  stop(): void;
 }
 
 export interface ICommandParser {
