@@ -14,6 +14,7 @@ import { CreateCommitWorkflow } from "./workflows/CreateCommitWorkflow";
 import { CreatePullRequestWorkflow } from "./workflows/CreatePullRequestWorkflow";
 import { ExplainCodeWorkflow } from "./workflows/ExplainCodeWorkflow";
 import { FixBugWorkflow } from "./workflows/FixBugWorkflow";
+import { GitStatusWorkflow } from "./workflows/GitStatusWorkflow";
 import { ImplementFeatureWorkflow } from "./workflows/ImplementFeatureWorkflow";
 import { ListPullRequestsWorkflow } from "./workflows/ListPullRequestsWorkflow";
 import { PushChangesWorkflow } from "./workflows/PushChangesWorkflow";
@@ -34,6 +35,8 @@ export class WorkflowFactory implements IWorkflowFactory {
         return new ImplementFeatureWorkflow(this.buildClaudeAdapter(context));
       case "fix-bug":
         return new FixBugWorkflow(this.buildClaudeAdapter(context));
+      case "verify-git-status":
+        return new GitStatusWorkflow(this.buildGitAdapter(context));
       case "create-commit":
         return new CreateCommitWorkflow(this.buildGitAdapter(context));
       case "push-changes":

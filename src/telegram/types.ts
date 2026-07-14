@@ -28,7 +28,6 @@ export interface OutgoingMessage {
   inlineKeyboard?: InlineKeyboardButton[][];
 }
 
-export interface ParsedCommand {
-  task: Task;
-  repositoryId?: string;
-}
+export type ParsedCommand =
+  | { kind: "task"; task: Task; repositoryId?: string }
+  | { kind: "workflow"; workflowId: string; input: Record<string, unknown>; repositoryId?: string };

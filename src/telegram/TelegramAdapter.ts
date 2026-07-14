@@ -43,11 +43,11 @@ export class TelegramAdapter implements ITelegramAdapter {
       return;
     }
 
-    const request: ExecutionRequest = {
-      task: parsed.task,
-      repositoryId: parsed.repositoryId,
-      correlationId: buildTelegramCorrelationId(chatId, update.updateId),
-    };
+    const correlationId = buildTelegramCorrelationId(chatId, update.updateId);
+    const request: ExecutionRequest =
+      parsed.kind === "workflow"
+        ? { kind: "workflow", workflowId: parsed.workflowId, input: parsed.input, repositoryId: parsed.repositoryId, correlationId }
+        : { kind: "task", task: parsed.task, repositoryId: parsed.repositoryId, correlationId };
 
     try {
       const result = await this.controllerCore.execute(request);

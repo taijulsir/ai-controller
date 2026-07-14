@@ -1,21 +1,56 @@
-import type { Task, TaskResult } from "../planner/types";
+import type { Task, TaskResult, TaskType } from "../planner/types";
 
-export interface ExecutionRequest {
-  task: Task;
-  repositoryId?: string;
-  correlationId?: string;
+export type ExecutionRequest =
+  | { kind: "task"; task: Task; repositoryId?: string; correlationId?: string }
+  | { kind: "workflow"; workflowId: string; input?: Record<string, unknown>; repositoryId?: string; correlationId?: string };
+
+export interface WorkflowExecutionRequest {
+  workflowId: string;
+  repositoryId: string;
+  input: Record<string, unknown>;
+  correlationId: string;
 }
 
-export interface ExecutionResult {
-  taskResult: TaskResult;
+export interface StepExecutionResult {
+  stepId: string;
+  taskType: TaskType;
+  executionResult: ExecutionResult;
+}
+
+export interface OrchestrationResult {
+  workflowId: string;
+  correlationId: string;
+  status: "completed" | "failed";
+  steps: StepExecutionResult[];
+  failedStep?: StepExecutionResult;
   startedAt: Date;
   completedAt: Date;
   durationMs: number;
-  warnings?: string[];
-  telemetry?: Record<string, unknown>;
-  approval?: {
-    required: boolean;
-    approvedBy?: string;
-    approvedAt?: Date;
-  };
+}
+
+export type ExecutionResult =
+  | {
+      kind: "task";
+      taskResult: TaskResult;
+      startedAt: Date;
+      completedAt: Date;
+      durationMs: number;
+      warnings?: string[];
+      telemetry?: Record<string, unknown>;
+      approval?: {
+        required: boolean;
+        approvedBy?: string;
+        approvedAt?: Date;
+      };
+    }
+  | {
+      kind: "workflow";
+      workflowResult: OrchestrationResult;
+      startedAt: Date;
+      completedAt: Date;
+      durationMs: number;
+    };
+
+export function isTaskExecutionResult(result: ExecutionResult): result is Extract<ExecutionResult, { kind: "task" }> {
+  return result.kind === "task";
 }

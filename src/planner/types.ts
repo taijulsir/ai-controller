@@ -3,6 +3,7 @@ export type TaskType =
   | "explain-code"
   | "implement-feature"
   | "fix-bug"
+  | "verify-git-status"
   | "create-commit"
   | "push-changes"
   | "create-pull-request"
@@ -28,6 +29,10 @@ export interface FixBugTask {
   input: { description: string };
 }
 
+export interface VerifyGitStatusTask {
+  type: "verify-git-status";
+}
+
 export interface CreateCommitTask {
   type: "create-commit";
   input: { message: string };
@@ -51,6 +56,7 @@ export type Task =
   | ExplainCodeTask
   | ImplementFeatureTask
   | FixBugTask
+  | VerifyGitStatusTask
   | CreateCommitTask
   | PushChangesTask
   | CreatePullRequestTask

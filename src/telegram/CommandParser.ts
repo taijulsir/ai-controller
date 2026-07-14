@@ -49,12 +49,21 @@ export class CommandParser implements ICommandParser {
     }
 
     const [commandName, ...argWords] = rest.split(/\s+/);
-    const handler = commandName ? this.commandHandlers[commandName.toLowerCase()] : undefined;
+    const args = argWords.join(" ");
+    const normalizedCommand = commandName?.toLowerCase();
 
+    if (normalizedCommand === "ship") {
+      if (!args) {
+        throw new CommandParseError('"ship" requires a message, e.g. "ship Add dark mode toggle".');
+      }
+      return { kind: "workflow", workflowId: "ship", input: { message: args }, repositoryId };
+    }
+
+    const handler = normalizedCommand ? this.commandHandlers[normalizedCommand] : undefined;
     if (!handler) {
       throw new CommandParseError(`Sorry, I don't recognize the command "${commandName ?? ""}".`);
     }
 
-    return { task: handler(argWords.join(" ")), repositoryId };
+    return { kind: "task", task: handler(args), repositoryId };
   }
 }
