@@ -3,7 +3,10 @@ import type { ITaskWorkflow } from "../interfaces";
 import type { AnalyzeRepositoryTask, Task, WorkflowResult } from "../types";
 
 export class AnalyzeRepositoryWorkflow implements ITaskWorkflow {
-  constructor(private readonly claudeAdapter: IClaudeAdapter) {}
+  constructor(
+    private readonly claudeAdapter: IClaudeAdapter,
+    private readonly shouldContinueSession: boolean,
+  ) {}
 
   async execute(task: Task, _signal: AbortSignal): Promise<WorkflowResult> {
     const { input } = task as AnalyzeRepositoryTask;
@@ -11,7 +14,7 @@ export class AnalyzeRepositoryWorkflow implements ITaskWorkflow {
       ? `Analyze this repository with a focus on: ${input.focus}`
       : "Analyze this repository and summarize its structure, key modules, and overall architecture.";
 
-    const result = await this.claudeAdapter.execute(prompt);
+    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession });
     return { success: true, output: result.output };
   }
 }

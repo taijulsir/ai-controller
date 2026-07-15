@@ -1,4 +1,4 @@
-import type { GitStatus } from "./types";
+import type { CommitSummary, GitStatus } from "./types";
 
 export interface IGitAdapter {
   status(): Promise<GitStatus>;
@@ -9,4 +9,5 @@ export interface IGitAdapter {
   commit(message: string): Promise<void>;
   push(): Promise<void>;
   pull(): Promise<void>;
+  getRecentCommits(limit?: number): Promise<CommitSummary[]>;
 }

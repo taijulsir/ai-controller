@@ -7,3 +7,11 @@ export interface GitStatus {
   untracked: string[];
   isClean: boolean;
 }
+
+export interface CommitSummary {
+  sha: string;
+  shortSha: string;
+  message: string;
+  author: string;
+  date: Date;
+}

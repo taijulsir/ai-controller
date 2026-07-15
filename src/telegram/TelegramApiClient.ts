@@ -1,7 +1,8 @@
 import type { IConfigService } from "../config/interfaces";
-import { buildTelegramApiUrl, LONG_POLL_TIMEOUT_SECONDS } from "./TelegramConstants";
+import { buildTelegramApiUrl, LONG_POLL_TIMEOUT_SECONDS, TELEGRAM_MAX_MESSAGE_LENGTH } from "./TelegramConstants";
 import { TelegramApiError } from "./errors";
 import type { ITelegramClient } from "./interfaces";
+import { splitMessageText } from "./TelegramMessageSplitter";
 import type { InlineKeyboardButton, OutgoingMessage, TelegramUpdate } from "./types";
 
 interface RawTelegramUpdate {
@@ -29,6 +30,21 @@ export class TelegramApiClient implements ITelegramClient {
   constructor(private readonly configService: IConfigService) {}
 
   async sendMessage(message: OutgoingMessage): Promise<void> {
+    const chunks = splitMessageText(message.text, TELEGRAM_MAX_MESSAGE_LENGTH);
+
+    for (let index = 0; index < chunks.length; index++) {
+      const isLastChunk = index === chunks.length - 1;
+      // Only the final chunk carries the inline keyboard, so approval
+      // buttons never appear more than once for a single logical reply.
+      await this.sendSingleMessage({
+        chatId: message.chatId,
+        text: chunks[index],
+        inlineKeyboard: isLastChunk ? message.inlineKeyboard : undefined,
+      });
+    }
+  }
+
+  private async sendSingleMessage(message: OutgoingMessage): Promise<void> {
     const { bot } = this.configService.getTelegramConfig();
     const url = buildTelegramApiUrl(bot.token, "sendMessage");
 

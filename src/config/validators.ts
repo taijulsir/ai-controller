@@ -81,6 +81,14 @@ export function validateControllerConfig(
     if (!isString(logging.directory)) issues.push('"logging.directory" must be a string');
   }
 
+  const memory = data.memory;
+  if (!isObject(memory)) {
+    issues.push('"memory" section is missing or invalid');
+  } else {
+    if (!isBoolean(memory.enabled)) issues.push('"memory.enabled" must be a boolean');
+    if (!isString(memory.directory)) issues.push('"memory.directory" must be a string');
+  }
+
   if (issues.length > 0) fail(filePath, issues);
 
   return data as unknown as ControllerConfig;

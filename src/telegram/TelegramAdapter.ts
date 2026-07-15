@@ -1,3 +1,4 @@
+import type { IApplicationService } from "../application/interfaces";
 import type { IControllerCore } from "../controller/interfaces";
 import type { ExecutionRequest } from "../controller/types";
 import { CommandParser } from "./CommandParser";
@@ -10,11 +11,12 @@ import type {
 } from "./interfaces";
 import { ResponseFormatter } from "./ResponseFormatter";
 import { buildTelegramCorrelationId } from "./TelegramCorrelation";
-import type { ParsedCommand, TelegramUpdate } from "./types";
+import type { ApplicationQuery, ParsedCommand, TelegramUpdate } from "./types";
 
 export class TelegramAdapter implements ITelegramAdapter {
   constructor(
     private readonly controllerCore: IControllerCore,
+    private readonly applicationService: IApplicationService,
     private readonly telegramSecurity: ITelegramSecurity,
     private readonly telegramClient: ITelegramClient,
     private readonly commandParser: ICommandParser = new CommandParser(),
@@ -43,6 +45,19 @@ export class TelegramAdapter implements ITelegramAdapter {
       return;
     }
 
+    if (parsed.kind === "query") {
+      try {
+        const text = await this.handleQuery(parsed.query, parsed.repositoryId);
+        await this.telegramClient.sendMessage({ chatId, text });
+      } catch (error) {
+        await this.telegramClient.sendMessage({
+          chatId,
+          text: `Something went wrong: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+      return;
+    }
+
     const correlationId = buildTelegramCorrelationId(chatId, update.updateId);
     const request: ExecutionRequest =
       parsed.kind === "workflow"
@@ -57,6 +72,21 @@ export class TelegramAdapter implements ITelegramAdapter {
         chatId,
         text: `Something went wrong: ${error instanceof Error ? error.message : String(error)}`,
       });
+    }
+  }
+
+  private async handleQuery(query: ApplicationQuery, repositoryId?: string): Promise<string> {
+    switch (query.type) {
+      case "status":
+        return this.responseFormatter.formatRepositoryStatus(await this.applicationService.getRepositoryStatus(repositoryId));
+      case "history":
+        return this.responseFormatter.formatHistory(
+          await this.applicationService.getRepositoryHistory(repositoryId, query.limit),
+        );
+      case "insights":
+        return this.responseFormatter.formatInsights(await this.applicationService.getRepositoryInsights(repositoryId));
+      case "session":
+        return this.responseFormatter.formatSessionStatus(this.applicationService.getSessionStatus(repositoryId));
     }
   }
 }

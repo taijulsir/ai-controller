@@ -25,6 +25,11 @@ export interface ControllerConfig {
     level: string;
     directory: string;
   };
+
+  memory: {
+    enabled: boolean;
+    directory: string;
+  };
 }
 
 export interface ClaudeConfig {

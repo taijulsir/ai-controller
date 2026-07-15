@@ -19,3 +19,7 @@ logging:
   enabled: true
   level: info
   directory: /home/aiagent/workspace/ai-controller/logs
+
+memory:
+  enabled: true
+  directory: /home/aiagent/workspace/ai-controller/memory

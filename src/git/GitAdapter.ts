@@ -1,11 +1,12 @@
 import type { Repository } from "../domain/repository/Repository";
 import type { IRepositoryRegistry } from "../repositories/interfaces";
 import { GitCommandRunner } from "./GitCommandRunner";
-import { GitCommand } from "./GitConstants";
+import { DEFAULT_RECENT_COMMITS_LIMIT, GitCommand } from "./GitConstants";
 import { NoActiveRepositoryError } from "./errors";
+import { parseGitLog } from "./GitLogParser";
 import { parseGitStatus } from "./GitStatusParser";
 import type { IGitAdapter } from "./interfaces";
-import type { GitStatus } from "./types";
+import type { CommitSummary, GitStatus } from "./types";
 
 export class GitAdapter implements IGitAdapter {
   constructor(
@@ -45,6 +46,11 @@ export class GitAdapter implements IGitAdapter {
 
   async pull(): Promise<void> {
     await this.run(GitCommand.pull());
+  }
+
+  async getRecentCommits(limit: number = DEFAULT_RECENT_COMMITS_LIMIT): Promise<CommitSummary[]> {
+    const output = await this.run(GitCommand.recentCommits(limit));
+    return parseGitLog(output);
   }
 
   private async run(args: string[]): Promise<string> {

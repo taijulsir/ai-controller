@@ -1,7 +1,9 @@
 import type { Task } from "../planner/types";
 import { CommandParseError } from "./errors";
 import type { ICommandParser } from "./interfaces";
-import type { ParsedCommand } from "./types";
+import type { ApplicationQuery, ParsedCommand } from "./types";
+
+const QUERY_COMMANDS: ReadonlySet<string> = new Set(["status", "history", "insights", "session"]);
 
 type TaskBuilder = (args: string) => Task;
 
@@ -59,11 +61,29 @@ export class CommandParser implements ICommandParser {
       return { kind: "workflow", workflowId: "ship", input: { message: args }, repositoryId };
     }
 
+    if (normalizedCommand && QUERY_COMMANDS.has(normalizedCommand)) {
+      return { kind: "query", query: this.buildQuery(normalizedCommand, args), repositoryId };
+    }
+
     const handler = normalizedCommand ? this.commandHandlers[normalizedCommand] : undefined;
     if (!handler) {
       throw new CommandParseError(`Sorry, I don't recognize the command "${commandName ?? ""}".`);
     }
 
     return { kind: "task", task: handler(args), repositoryId };
+  }
+
+  private buildQuery(command: string, args: string): ApplicationQuery {
+    if (command === "history") {
+      if (!args) {
+        return { type: "history" };
+      }
+      const limit = Number.parseInt(args, 10);
+      if (Number.isNaN(limit) || limit <= 0) {
+        throw new CommandParseError('"history" takes an optional positive number, e.g. "history 10".');
+      }
+      return { type: "history", limit };
+    }
+    return { type: command as "status" | "insights" | "session" };
   }
 }

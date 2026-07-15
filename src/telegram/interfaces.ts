@@ -1,4 +1,8 @@
 import type { ExecutionResult } from "../controller/types";
+import type { RepositoryInsightReport } from "../decisions/types";
+import type { RepositorySnapshot } from "../intelligence/types";
+import type { ProjectMemoryEvent } from "../memory/types";
+import type { ClaudeSessionInfo } from "../session/types";
 import type { OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
 
 export interface ITelegramAdapter {
@@ -26,6 +30,10 @@ export interface ICommandParser {
 
 export interface IResponseFormatter {
   format(result: ExecutionResult): string;
+  formatRepositoryStatus(snapshot: RepositorySnapshot): string;
+  formatHistory(events: ProjectMemoryEvent[]): string;
+  formatInsights(report: RepositoryInsightReport): string;
+  formatSessionStatus(info: ClaudeSessionInfo | undefined): string;
 }
 
 export interface ITelegramSecurity {

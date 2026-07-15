@@ -28,6 +28,13 @@ export interface OutgoingMessage {
   inlineKeyboard?: InlineKeyboardButton[][];
 }
 
+export type ApplicationQuery =
+  | { type: "status" }
+  | { type: "history"; limit?: number }
+  | { type: "insights" }
+  | { type: "session" };
+
 export type ParsedCommand =
   | { kind: "task"; task: Task; repositoryId?: string }
-  | { kind: "workflow"; workflowId: string; input: Record<string, unknown>; repositoryId?: string };
+  | { kind: "workflow"; workflowId: string; input: Record<string, unknown>; repositoryId?: string }
+  | { kind: "query"; query: ApplicationQuery; repositoryId?: string };

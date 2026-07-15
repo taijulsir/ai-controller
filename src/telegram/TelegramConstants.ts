@@ -6,6 +6,11 @@ export const POLL_ERROR_BACKOFF_MS = 2000;
 // field later if this ever needs to be configurable.
 export const APPROVAL_TIMEOUT_MINUTES = 15;
 
+// Telegram's hard limit is 4096 UTF-16 code units per text message. This
+// leaves a safety margin below that for multi-byte characters, so a message
+// right at the boundary never trips the API's exact cutoff.
+export const TELEGRAM_MAX_MESSAGE_LENGTH = 4000;
+
 export function buildTelegramApiUrl(token: string, method: string): string {
   return `${TELEGRAM_API_BASE_URL}/bot${token}/${method}`;
 }
