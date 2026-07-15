@@ -1,5 +1,6 @@
+import type { RepositorySnapshot } from "../intelligence/types";
 import type { RepositoryInsightReport } from "./types";
 
 export interface IDecisionEngine {
-  analyze(repositoryId: string): Promise<RepositoryInsightReport>;
+  analyze(repository: RepositorySnapshot): Promise<RepositoryInsightReport>;
 }

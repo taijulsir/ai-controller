@@ -2,6 +2,7 @@ import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
+import type { PipelineResult, PipelineStepOutcome } from "../pipeline/types";
 import type { ClaudeSessionInfo } from "../session/types";
 import type { IResponseFormatter } from "./interfaces";
 
@@ -118,5 +119,40 @@ export class ResponseFormatter implements IResponseFormatter {
       return "No session for this repository.";
     }
     return `Session ${info.id} — ${info.status}, created ${info.createdAt.toISOString()}, last used ${info.lastUsedAt.toISOString()}`;
+  }
+
+  formatPipelineResult(result: PipelineResult): string {
+    // Bypass results carry a plain ExecutionResult from a standalone
+    // create-commit/push-changes/create-pull-request command — reusing
+    // format() here guarantees identical output to what that command
+    // produced before ExecutionPipeline existed.
+    if (result.path === "bypass") {
+      return this.format(result.result);
+    }
+
+    const lines = [`Recommended action: ${result.strategy.recommendedAction}`];
+    for (const outcome of result.stepOutcomes) {
+      lines.push(this.formatPipelineStepOutcome(outcome));
+    }
+
+    const lastOutcome = result.stepOutcomes[result.stepOutcomes.length - 1];
+    if (lastOutcome?.status === "executed") {
+      lines.push("", this.format(lastOutcome.result));
+    }
+
+    return lines.join("\n");
+  }
+
+  private formatPipelineStepOutcome(outcome: PipelineStepOutcome): string {
+    switch (outcome.status) {
+      case "executed": {
+        const succeeded = outcome.result.kind === "task" ? outcome.result.taskResult.success : outcome.result.workflowResult.status === "completed";
+        return `${succeeded ? "✓" : "✗"} ${outcome.capability}`;
+      }
+      case "blocked":
+        return `⛔ ${outcome.capability}: ${outcome.explanation}\nNext step: ${outcome.recommendedAction}`;
+      case "skipped":
+        return `— ${outcome.capability} skipped: ${outcome.reason}`;
+    }
   }
 }

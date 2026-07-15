@@ -1,4 +1,3 @@
-import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
 import type { ProjectMemoryEvent } from "../memory/types";
@@ -18,13 +17,17 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 export class DecisionEngine implements IDecisionEngine {
   constructor(
-    private readonly repositoryIntelligence: IRepositoryIntelligenceService,
     private readonly projectMemory: IProjectMemoryService,
     private readonly sessionManager: IClaudeSessionManager,
   ) {}
 
-  async analyze(repositoryId: string): Promise<RepositoryInsightReport> {
-    const snapshot = await this.repositoryIntelligence.getSnapshot(repositoryId);
+  // Reasons entirely from the RepositorySnapshot it's given — it no longer
+  // fetches one itself. Callers (StrategyEngine as part of the autonomous
+  // pipeline, or ApplicationService for the standalone /insights command)
+  // own resolving the snapshot exactly once and passing it in, so every
+  // consumer of a given snapshot reasons about identical repository state.
+  async analyze(snapshot: RepositorySnapshot): Promise<RepositoryInsightReport> {
+    const repositoryId = snapshot.repository.id;
     const recentHistory = await this.projectMemory.getRecentEvents({ repositoryId });
     const sessionInfo = this.sessionManager.getSessionStatus(repositoryId);
 

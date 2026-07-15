@@ -2,15 +2,22 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { ApplicationService } from "./application";
 import { ApprovalEngine } from "./approval";
+import { EngineeringAssistanceEngine } from "./assistance";
+import { ContextBuilder } from "./context";
+import { ExecutionCoordinator } from "./coordination";
 import { ControllerCore, DeferredControllerCore } from "./controller";
 import { ConfigService } from "./config";
 import { DecisionEngine } from "./decisions";
 import { RepositoryIntelligenceService } from "./intelligence";
 import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { TaskPlanner, WorkflowFactory } from "./planner";
+import { ExecutionPipeline } from "./pipeline";
+import { PlanningEngine } from "./planning";
 import { WorkflowOrchestrator, WorkflowRegistry } from "./orchestration";
+import { RecommendationEngine } from "./recommendations";
 import { RepositoryRegistry } from "./repositories";
 import { ClaudeSessionManager } from "./session";
+import { StrategyEngine } from "./strategy";
 import {
   TelegramAdapter,
   TelegramApiClient,
@@ -33,20 +40,48 @@ async function bootstrap(): Promise<void> {
   const repositoryRegistry = new RepositoryRegistry(configService);
 
   // Repository Intelligence / Project Memory / Session Manager / Decision Engine
-  // (Phases 6.1-6.5) don't depend on the execution stack at all, so they're
-  // built first — both the recording decorator and WorkflowFactory's
-  // session-aware Claude wiring below need them already constructed.
+  // / Context Builder (Phases 6.1-6.5) don't depend on the execution stack at
+  // all, so they're built first — both the recording decorator and
+  // WorkflowFactory's session-aware Claude wiring below need the session
+  // manager already constructed. DecisionEngine and ContextBuilder no longer
+  // take IRepositoryIntelligenceService: they reason about whichever
+  // RepositorySnapshot their caller passes them (ApplicationService below,
+  // or StrategyEngine as part of a shared PipelineContext) rather than
+  // fetching their own.
   const repositoryIntelligence = new RepositoryIntelligenceService(repositoryRegistry, configService);
   const projectMemory = new ProjectMemoryService(repositoryRegistry, configService);
   const sessionManager = new ClaudeSessionManager();
-  const decisionEngine = new DecisionEngine(repositoryIntelligence, projectMemory, sessionManager);
+  const decisionEngine = new DecisionEngine(projectMemory, sessionManager);
+  const contextBuilder = new ContextBuilder(projectMemory);
+  // RecommendationEngine (Phase 7.6) is a pure synthesis step, same shape as
+  // PlanningEngine/ExecutionCoordinator: no constructor dependencies, no I/O.
+  // ApplicationService fetches the snapshot/insights/session exactly once
+  // each and hands them in — it never gives RecommendationEngine a way to
+  // recompute or duplicate what those already produced.
+  const recommendationEngine = new RecommendationEngine();
+  // EngineeringAssistanceEngine (Phase 7.8) is likewise a pure transform: it
+  // only relabels an already-computed RepositoryRecommendationReport into
+  // engineering-oriented suggested actions, never recomputing a
+  // recommendation itself.
+  const engineeringAssistanceEngine = new EngineeringAssistanceEngine();
   const applicationService = new ApplicationService(
     repositoryIntelligence,
     projectMemory,
     decisionEngine,
     sessionManager,
     repositoryRegistry,
+    recommendationEngine,
+    engineeringAssistanceEngine,
   );
+
+  // Strategy Engine / Planning Engine / Execution Coordinator (Phases 7.1-7.3)
+  // are the autonomous decision-support stack: Task -> TaskExecutionStrategy
+  // -> ExecutionPlan -> CapabilityProgram. None of them execute anything —
+  // ExecutionPipeline below is what finally turns a CapabilityProgram into
+  // real ControllerCore calls.
+  const strategyEngine = new StrategyEngine(decisionEngine, contextBuilder, sessionManager);
+  const planningEngine = new PlanningEngine();
+  const executionCoordinator = new ExecutionCoordinator();
 
   const workflowFactory = new WorkflowFactory(configService, repositoryRegistry, sessionManager);
   const taskPlanner = new TaskPlanner(configService, workflowFactory);
@@ -56,10 +91,20 @@ async function bootstrap(): Promise<void> {
   // still passes through approval and gets recorded — but that instance
   // doesn't exist yet until after ControllerCore (which needs the
   // orchestrator) is built. DeferredControllerCore is the seam: bound below,
-  // once the real entry point is known.
+  // once the real entry point is known. ExecutionPipeline is given this same
+  // seam, not a later concrete instance, so it resolves correctly regardless
+  // of whether Telegram ends up enabled below — identical to how
+  // WorkflowOrchestrator already depends on it.
   const controllerEntryPoint = new DeferredControllerCore();
   const workflowRegistry = new WorkflowRegistry();
   const workflowOrchestrator = new WorkflowOrchestrator(controllerEntryPoint, workflowRegistry);
+  const executionPipeline = new ExecutionPipeline(
+    repositoryIntelligence,
+    strategyEngine,
+    planningEngine,
+    executionCoordinator,
+    controllerEntryPoint,
+  );
 
   const plainControllerCore = new ControllerCore(repositoryRegistry, taskPlanner, workflowOrchestrator);
 
@@ -91,7 +136,12 @@ async function bootstrap(): Promise<void> {
   const controllerCore = new MemoryRecordingControllerCore(approvalControllerCore, projectMemory);
   controllerEntryPoint.bind(controllerCore);
 
-  const telegramAdapter = new TelegramAdapter(controllerCore, applicationService, telegramSecurity, telegramClient);
+  // ExecutionPipeline is now the single runtime entrypoint Telegram submits
+  // engineering task execution requests to (Phase 7.5) — it was built above
+  // against controllerEntryPoint, so it transparently reaches this same
+  // fully-decorated controllerCore (approval-gated, memory-recording) now
+  // that binding has happened, identical to how WorkflowOrchestrator does.
+  const telegramAdapter = new TelegramAdapter(executionPipeline, applicationService, telegramSecurity, telegramClient);
   const poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramApprovalProvider);
 
   process.once("SIGINT", () => poller.stop());

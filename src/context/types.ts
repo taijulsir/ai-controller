@@ -3,7 +3,7 @@ import type { ProjectMemoryEvent } from "../memory/types";
 import type { Task } from "../planner/types";
 
 export interface ExecutionContextRequest {
-  repositoryId?: string;
+  repository: RepositorySnapshot;
   task?: Task;
   activeWorkflow?: { workflowId: string; stepId?: string };
   historyLimit?: number;

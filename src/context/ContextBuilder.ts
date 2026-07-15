@@ -1,4 +1,3 @@
-import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
 import type { IProjectMemoryService } from "../memory/interfaces";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { IContextBuilder } from "./interfaces";
@@ -7,15 +6,16 @@ import type { ExecutionContext, ExecutionContextRequest } from "./types";
 const DEFAULT_HISTORY_LIMIT = 20;
 const RELEVANT_HISTORY_LIMIT = 5;
 
+// Assembles context from the RepositorySnapshot it's given — it no longer
+// fetches one itself, same boundary as DecisionEngine. Its own responsibility
+// narrows to what only it owns: filtering Project Memory history for
+// relevance to a prospective task.
 export class ContextBuilder implements IContextBuilder {
-  constructor(
-    private readonly repositoryIntelligence: IRepositoryIntelligenceService,
-    private readonly projectMemory: IProjectMemoryService,
-  ) {}
+  constructor(private readonly projectMemory: IProjectMemoryService) {}
 
-  async build(request: ExecutionContextRequest = {}): Promise<ExecutionContext> {
+  async build(request: ExecutionContextRequest): Promise<ExecutionContext> {
     const warnings: string[] = [];
-    const repository = await this.repositoryIntelligence.getSnapshot(request.repositoryId);
+    const { repository } = request;
 
     let recentHistory: ProjectMemoryEvent[] = [];
     try {
