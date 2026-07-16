@@ -3,6 +3,7 @@ import type { RepositoryInsightReport } from "../decisions/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { PipelineResult } from "../pipeline/types";
+import type { RuntimeReport } from "../reporting/types";
 import type { ClaudeSessionInfo } from "../session/types";
 import type { OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
 
@@ -36,6 +37,16 @@ export interface IResponseFormatter {
   formatInsights(report: RepositoryInsightReport): string;
   formatSessionStatus(info: ClaudeSessionInfo | undefined): string;
   formatPipelineResult(result: PipelineResult): string;
+  // Phase 8.10: all five consume the same RuntimeReport shape and only
+  // select/join its already-produced title/health/summary/section content —
+  // none of them reformat a value, reinterpret a finding, or parse a
+  // severity string. RuntimeReportingEngine remains the only place that
+  // content is produced.
+  formatRuntimeReport(report: RuntimeReport): string;
+  formatRuntimeStatus(report: RuntimeReport): string;
+  formatRuntimeDiagnostics(report: RuntimeReport): string;
+  formatRuntimeMonitoring(report: RuntimeReport): string;
+  formatRuntimePolicy(report: RuntimeReport): string;
 }
 
 export interface ITelegramSecurity {

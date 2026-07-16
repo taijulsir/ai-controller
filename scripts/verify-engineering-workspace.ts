@@ -1,6 +1,10 @@
 import { ApplicationService } from "../src/application/ApplicationService";
+import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
+import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
+import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
+import type { IRuntimeControlService } from "../src/control/interfaces";
 import type { IDecisionEngine } from "../src/decisions/interfaces";
 import type { RepositoryInsightReport } from "../src/decisions/types";
 import type { IRepositoryIntelligenceService } from "../src/intelligence/interfaces";
@@ -9,12 +13,15 @@ import type { IProjectMemoryService } from "../src/memory/interfaces";
 import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { IProactiveMonitor } from "../src/monitoring/interfaces";
 import type { AttentionEvent } from "../src/monitoring/types";
+import type { RuntimePolicyStatus } from "../src/policy/types";
 import type { IRecommendationEngine } from "../src/recommendations/interfaces";
 import type { Recommendation, RepositoryRecommendationReport } from "../src/recommendations/types";
 import type { IRepositoryRegistry } from "../src/repositories/interfaces";
 import type { Repository } from "../src/domain/repository/Repository";
 import type { IClaudeSessionManager } from "../src/session/interfaces";
 import type { ClaudeSessionDecision, ClaudeSessionInfo } from "../src/session/types";
+import type { IRuntimeStatusService } from "../src/status/interfaces";
+import type { RuntimeStatus } from "../src/status/types";
 
 function baseSnapshot(): RepositorySnapshot {
   return {
@@ -119,6 +126,52 @@ class FakeProactiveMonitor implements IProactiveMonitor {
   }
 }
 
+// This script only exercises getEngineeringWorkspace() — these three
+// throw-stub collaborators exist only so ApplicationService's constructor is
+// satisfied; none of Phase 8.5/8.6/8.7's methods are called here.
+class UnusedRuntimeStatusService implements IRuntimeStatusService {
+  getStatus(): RuntimeStatus {
+    throw new Error("not used");
+  }
+}
+class UnusedRuntimeControlService implements IRuntimeControlService {
+  pauseMonitoring(): never {
+    throw new Error("not used");
+  }
+  resumeMonitoring(): never {
+    throw new Error("not used");
+  }
+  enterMaintenanceMode(): never {
+    throw new Error("not used");
+  }
+  exitMaintenanceMode(): never {
+    throw new Error("not used");
+  }
+  enableRepository(): never {
+    throw new Error("not used");
+  }
+  disableRepository(): never {
+    throw new Error("not used");
+  }
+  resetDispatcherStatistics(): never {
+    throw new Error("not used");
+  }
+  resetRuntimeStatistics(): never {
+    throw new Error("not used");
+  }
+}
+class UnusedRuntimeAdministrationService implements IRuntimeAdministrationService {
+  getStatus(): RuntimeStatus {
+    throw new Error("not used");
+  }
+  getControl(): IRuntimeControlService {
+    throw new Error("not used");
+  }
+  getPolicies(): RuntimePolicyStatus {
+    throw new Error("not used");
+  }
+}
+
 function assert(condition: boolean, message: string): void {
   console.log(`${condition ? "PASS" : "FAIL"} - ${message}`);
 }
@@ -139,6 +192,11 @@ function buildService(monitor?: FakeProactiveMonitor) {
     repositoryRegistry,
     recommendationEngine,
     engineeringAssistanceEngine,
+    new UnusedRuntimeStatusService(),
+    new RuntimeDiagnosticsEngine(),
+    new RuntimeReportingEngine(),
+    new UnusedRuntimeControlService(),
+    new UnusedRuntimeAdministrationService(),
     monitor,
   );
   return { service, repositoryIntelligence, projectMemory, decisionEngine, recommendationEngine, engineeringAssistanceEngine };

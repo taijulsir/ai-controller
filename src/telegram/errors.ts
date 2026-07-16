@@ -11,3 +11,12 @@ export class TelegramApiError extends Error {
     this.name = "TelegramApiError";
   }
 }
+
+export class NoNotificationRecipientConfiguredError extends Error {
+  constructor() {
+    super(
+      "Cannot deliver an attention notification: no allowed Telegram users are configured in config/telegram.yaml (security.allowed_users).",
+    );
+    this.name = "NoNotificationRecipientConfiguredError";
+  }
+}

@@ -96,6 +96,12 @@ export class TelegramAdapter implements ITelegramAdapter {
     return { kind: "pipeline", message, repositoryId: parsed.repositoryId, correlationId };
   }
 
+  // Phase 8.10: each "runtime-*" case calls ApplicationService.getRuntimeReport()
+  // exactly once, within that case alone — the switch executes exactly one
+  // case per call, so no runtime query ever fetches the report more than
+  // once. No new ApplicationService method exists for any of these views;
+  // all five are different selections over the same RuntimeReport, decided
+  // entirely inside ResponseFormatter.
   private async handleQuery(query: ApplicationQuery, repositoryId?: string): Promise<string> {
     switch (query.type) {
       case "status":
@@ -108,6 +114,16 @@ export class TelegramAdapter implements ITelegramAdapter {
         return this.responseFormatter.formatInsights(await this.applicationService.getRepositoryInsights(repositoryId));
       case "session":
         return this.responseFormatter.formatSessionStatus(this.applicationService.getSessionStatus(repositoryId));
+      case "runtime-report":
+        return this.responseFormatter.formatRuntimeReport(this.applicationService.getRuntimeReport());
+      case "runtime-status":
+        return this.responseFormatter.formatRuntimeStatus(this.applicationService.getRuntimeReport());
+      case "runtime-diagnostics":
+        return this.responseFormatter.formatRuntimeDiagnostics(this.applicationService.getRuntimeReport());
+      case "runtime-monitoring":
+        return this.responseFormatter.formatRuntimeMonitoring(this.applicationService.getRuntimeReport());
+      case "runtime-policy":
+        return this.responseFormatter.formatRuntimePolicy(this.applicationService.getRuntimeReport());
     }
   }
 }

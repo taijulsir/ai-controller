@@ -1,7 +1,11 @@
+import type { IRuntimeAdministrationService } from "../admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../assistance/types";
+import type { IRuntimeControlService } from "../control/interfaces";
 import type { IDecisionEngine } from "../decisions/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
+import type { IRuntimeDiagnosticsEngine } from "../diagnostics/interfaces";
+import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
@@ -10,8 +14,12 @@ import type { IProactiveMonitor } from "../monitoring/interfaces";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { IRepositoryRegistry } from "../repositories/interfaces";
+import type { IRuntimeReportingEngine } from "../reporting/interfaces";
+import type { RuntimeReport } from "../reporting/types";
 import type { IClaudeSessionManager } from "../session/interfaces";
 import type { ClaudeSessionInfo } from "../session/types";
+import type { IRuntimeStatusService } from "../status/interfaces";
+import type { RuntimeStatus } from "../status/types";
 import type { EngineeringWorkspace } from "../workspace/types";
 import { NoActiveRepositoryError } from "./errors";
 import type { IApplicationService } from "./interfaces";
@@ -25,6 +33,32 @@ export class ApplicationService implements IApplicationService {
     private readonly repositoryRegistry: IRepositoryRegistry,
     private readonly recommendationEngine: IRecommendationEngine,
     private readonly engineeringAssistanceEngine: IEngineeringAssistanceEngine,
+    // Phase 8.5: the composition root actually passes a DeferredRuntimeStatusService
+    // here (bound to the real RuntimeStatusService later, once the Background
+    // Runtime cluster is built) — see DeferredRuntimeStatusService's own doc
+    // comment for why that seam exists. From this class's perspective it is
+    // simply an IRuntimeStatusService, exactly like every other dependency.
+    private readonly runtimeStatusService: IRuntimeStatusService,
+    // Phase 8.8: zero constructor dependencies of its own (a pure transform,
+    // like PlanningEngine/ExecutionCoordinator/RecommendationEngine) — no
+    // deferred seam is needed for this one, unlike the three runtime-facade
+    // dependencies below, since it never reaches back toward
+    // ApplicationService or anything else.
+    private readonly runtimeDiagnosticsEngine: IRuntimeDiagnosticsEngine,
+    // Phase 8.9: zero constructor dependencies of its own, same shape as
+    // runtimeDiagnosticsEngine above — no deferred seam needed.
+    private readonly runtimeReportingEngine: IRuntimeReportingEngine,
+    // Phase 8.6: same seam shape as runtimeStatusService above — the
+    // composition root actually passes a DeferredRuntimeControlService here,
+    // bound to the real RuntimeControlService once the Background Runtime
+    // cluster exists. From this class's perspective it is simply an
+    // IRuntimeControlService.
+    private readonly runtimeControlService: IRuntimeControlService,
+    // Phase 8.7: same seam shape as the two above — the composition root
+    // actually passes a DeferredRuntimeAdministrationService here, bound to
+    // the real RuntimeAdministrationService once the Background Runtime
+    // cluster exists.
+    private readonly runtimeAdministrationService: IRuntimeAdministrationService,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -103,6 +137,49 @@ export class ApplicationService implements IApplicationService {
       recentHistory,
       attentionEvents,
     };
+  }
+
+  // Phase 8.5: pure delegation, no additional logic — RuntimeStatusService
+  // already assembles the full immutable snapshot; this method exists only
+  // so Telegram/future front-ends have exactly one read-facade to depend on,
+  // matching every other query this class exposes.
+  getRuntimeStatus(): RuntimeStatus {
+    return this.runtimeStatusService.getStatus();
+  }
+
+  // Phase 8.6: pure delegation — returns the held reference itself, no
+  // orchestration. Whoever calls a method on the returned object reaches
+  // RuntimeControlService directly.
+  getRuntimeControl(): IRuntimeControlService {
+    return this.runtimeControlService;
+  }
+
+  // Phase 8.7: pure delegation — returns the held reference itself, no
+  // orchestration.
+  getRuntimeAdministration(): IRuntimeAdministrationService {
+    return this.runtimeAdministrationService;
+  }
+
+  // Phase 8.8: orchestration only, same fetch-once-then-analyze shape as
+  // getRepositoryInsights() (getSnapshot() then decisionEngine.analyze()) —
+  // fetch the RuntimeStatus exactly once, hand it to the pure
+  // RuntimeDiagnosticsEngine, return what it produces. No branching, no
+  // interpretation, no message assembly happens here.
+  getRuntimeDiagnosis(): RuntimeDiagnosticsReport {
+    const status = this.runtimeStatusService.getStatus();
+    return this.runtimeDiagnosticsEngine.diagnose(status);
+  }
+
+  // Phase 8.9: fetches RuntimeStatus exactly once and reuses that same
+  // object for both diagnose() and buildReport() — deliberately does NOT
+  // call getRuntimeDiagnosis() (which would fetch a second, independent
+  // RuntimeStatus snapshot), since the report's raw-facts sections and its
+  // diagnosis must describe the exact same instant, not two separately
+  // fetched reads that could disagree.
+  getRuntimeReport(): RuntimeReport {
+    const status = this.runtimeStatusService.getStatus();
+    const diagnostics = this.runtimeDiagnosticsEngine.diagnose(status);
+    return this.runtimeReportingEngine.buildReport(status, diagnostics);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

@@ -3,7 +3,7 @@ import { CommandParseError } from "./errors";
 import type { ICommandParser } from "./interfaces";
 import type { ApplicationQuery, ParsedCommand } from "./types";
 
-const QUERY_COMMANDS: ReadonlySet<string> = new Set(["status", "history", "insights", "session"]);
+const QUERY_COMMANDS: ReadonlySet<string> = new Set(["status", "history", "insights", "session", "runtime"]);
 
 type TaskBuilder = (args: string) => Task;
 
@@ -84,6 +84,35 @@ export class CommandParser implements ICommandParser {
       }
       return { type: "history", limit };
     }
+    if (command === "runtime") {
+      return this.buildRuntimeQuery(args);
+    }
     return { type: command as "status" | "insights" | "session" };
+  }
+
+  // A bare "/runtime" (args === "") is normalized to "report" so it behaves
+  // exactly the same as "/runtime report" — both resolve to the identical
+  // ApplicationQuery variant, per Phase 8.10's requirement. An unrecognized
+  // subcommand (e.g. "/runtime foo") falls through to the same
+  // CommandParseError every other unrecognized command already throws,
+  // caught by TelegramAdapter and sent back to the user as a plain reply —
+  // the existing unknown-command behavior, not a separate mechanism.
+  private buildRuntimeQuery(args: string): ApplicationQuery {
+    const subcommand = args.trim().toLowerCase() || "report";
+
+    switch (subcommand) {
+      case "report":
+        return { type: "runtime-report" };
+      case "status":
+        return { type: "runtime-status" };
+      case "diagnostics":
+        return { type: "runtime-diagnostics" };
+      case "monitoring":
+        return { type: "runtime-monitoring" };
+      case "policy":
+        return { type: "runtime-policy" };
+      default:
+        throw new CommandParseError(`Sorry, I don't recognize the runtime command "${subcommand}".`);
+    }
   }
 }

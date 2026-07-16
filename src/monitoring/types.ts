@@ -17,6 +17,15 @@ export interface RecommendationState {
 
 // Timing thresholds as a plain value, not logic — policy stays separate from
 // monitoring logic, and can change without redesigning ProactiveMonitor.
+//
+// Unrelated to src/policy's RuntimePolicyEngine (Phase 8.4) despite the
+// similar name: this is ProactiveMonitor's own internal dedup-timing
+// threshold (how long a still-active recommendation must persist before its
+// "sustained" event fires) — a content-aware detail of monitoring's own
+// analysis. RuntimePolicyEngine answers a different, operational question
+// ("is monitoring/notification currently permitted at all") and knows
+// nothing about recommendation kinds, transitions, or sustained-duration
+// math. Neither should be merged into the other.
 export interface MonitoringPolicy {
   sustainedDurationMs: number;
 }

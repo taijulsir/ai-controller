@@ -3,8 +3,14 @@ import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { PipelineResult, PipelineStepOutcome } from "../pipeline/types";
+import type { RuntimeReport, RuntimeReportSection } from "../reporting/types";
 import type { ClaudeSessionInfo } from "../session/types";
 import type { IResponseFormatter } from "./interfaces";
+
+// Section titles as produced by RuntimeReportingEngine (Phase 8.9) — used
+// only to select which already-built sections to include per runtime query
+// view, never to reformat or reinterpret their content.
+const RUNTIME_STATUS_SECTION_TITLES = ["Runtime", "Workers", "Monitoring", "Policy", "Attention"];
 
 export class ResponseFormatter implements IResponseFormatter {
   format(result: ExecutionResult): string {
@@ -154,5 +160,64 @@ export class ResponseFormatter implements IResponseFormatter {
       case "skipped":
         return `— ${outcome.capability} skipped: ${outcome.reason}`;
     }
+  }
+
+  // Phase 8.10: the full report — title, health, summary, then every
+  // section in the order RuntimeReportingEngine produced them. Every piece
+  // of text here (report.title, report.health, report.summary,
+  // section.title, section.lines) is used verbatim; only the ordering and
+  // blank-line separation between sections is decided here.
+  formatRuntimeReport(report: RuntimeReport): string {
+    const lines: string[] = [report.title, report.health, report.summary];
+    for (const section of report.sections) {
+      lines.push("", section.title, ...section.lines);
+    }
+    return lines.join("\n");
+  }
+
+  // The "raw facts" view: every section except Findings — i.e. everything
+  // RuntimeStatus itself would have shown, with no health verdict attached.
+  formatRuntimeStatus(report: RuntimeReport): string {
+    return this.joinSections(this.selectSections(report, RUNTIME_STATUS_SECTION_TITLES));
+  }
+
+  // The "judgment" view: health + summary + the Findings section only —
+  // deliberately excludes the raw-facts sections, mirroring the same
+  // status-vs-diagnosis split RuntimeStatus/RuntimeDiagnosticsReport
+  // themselves already draw.
+  formatRuntimeDiagnostics(report: RuntimeReport): string {
+    const lines: string[] = [report.health, report.summary];
+    for (const section of this.selectSections(report, ["Findings"])) {
+      lines.push("", section.title, ...section.lines);
+    }
+    return lines.join("\n");
+  }
+
+  formatRuntimeMonitoring(report: RuntimeReport): string {
+    return this.joinSections(this.selectSections(report, ["Monitoring"]));
+  }
+
+  formatRuntimePolicy(report: RuntimeReport): string {
+    return this.joinSections(this.selectSections(report, ["Policy"]));
+  }
+
+  // The one shared section-selection helper (Phase 8.10) — returns the
+  // named sections in RuntimeReport.sections' own order, never reordering,
+  // filtering finding content, or inspecting section.lines. Every narrower
+  // runtime view above is built from this one helper rather than repeating
+  // its own filter logic.
+  private selectSections(report: RuntimeReport, titles: string[]): RuntimeReportSection[] {
+    return report.sections.filter((section) => titles.includes(section.title));
+  }
+
+  private joinSections(sections: RuntimeReportSection[]): string {
+    const lines: string[] = [];
+    for (const section of sections) {
+      if (lines.length > 0) {
+        lines.push("");
+      }
+      lines.push(section.title, ...section.lines);
+    }
+    return lines.join("\n");
   }
 }
