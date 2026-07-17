@@ -1,6 +1,7 @@
 import { ApplicationService } from "../src/application/ApplicationService";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
+import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
@@ -197,6 +198,7 @@ function buildService(monitor?: FakeProactiveMonitor) {
     new RuntimeReportingEngine(),
     new UnusedRuntimeControlService(),
     new UnusedRuntimeAdministrationService(),
+    new AutonomousPlanningEngine(),
     monitor,
   );
   return { service, repositoryIntelligence, projectMemory, decisionEngine, recommendationEngine, engineeringAssistanceEngine };

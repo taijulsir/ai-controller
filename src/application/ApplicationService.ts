@@ -1,6 +1,8 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../assistance/types";
+import type { IAutonomousPlanningEngine } from "../autonomy/interfaces";
+import type { AutonomousPlan } from "../autonomy/types";
 import type { IRuntimeControlService } from "../control/interfaces";
 import type { IDecisionEngine } from "../decisions/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
@@ -59,6 +61,12 @@ export class ApplicationService implements IApplicationService {
     // the real RuntimeAdministrationService once the Background Runtime
     // cluster exists.
     private readonly runtimeAdministrationService: IRuntimeAdministrationService,
+    // Phase 9.1: zero constructor dependencies of its own (a pure transform,
+    // like recommendationEngine/engineeringAssistanceEngine/
+    // runtimeDiagnosticsEngine/runtimeReportingEngine above) — no deferred
+    // seam needed, since it never reaches back toward ApplicationService or
+    // anything else.
+    private readonly autonomousPlanningEngine: IAutonomousPlanningEngine,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -180,6 +188,25 @@ export class ApplicationService implements IApplicationService {
     const status = this.runtimeStatusService.getStatus();
     const diagnostics = this.runtimeDiagnosticsEngine.diagnose(status);
     return this.runtimeReportingEngine.buildReport(status, diagnostics);
+  }
+
+  // Phase 9.1: portfolio-wide, unlike every other method here — reuses
+  // getRecommendations() once per registered repository (itself already
+  // fetch-once per repository) rather than re-deriving any snapshot,
+  // insight, or session data. Promise.allSettled() means one repository
+  // failing to produce a report (e.g. an unreachable path) degrades that
+  // repository out of the plan instead of aborting portfolio-wide planning
+  // for every other repository — the same graceful-degradation precedent
+  // RepositoryIntelligenceService already established for its own
+  // multi-source fan-out. The pure AutonomousPlanningEngine only ever sees
+  // the reports that actually succeeded.
+  async getAutonomousPlan(): Promise<AutonomousPlan> {
+    const repositories = this.repositoryRegistry.getAllRepositories();
+    const settled = await Promise.allSettled(repositories.map((repository) => this.getRecommendations(repository.id)));
+    const reports = settled
+      .filter((outcome): outcome is PromiseFulfilledResult<RepositoryRecommendationReport> => outcome.status === "fulfilled")
+      .map((outcome) => outcome.value);
+    return this.autonomousPlanningEngine.buildPlan(reports);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

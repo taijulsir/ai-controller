@@ -5,6 +5,7 @@ import { ApplicationService } from "./application";
 import { ApprovalEngine } from "./approval";
 import { AttentionDispatcher } from "./attention";
 import { EngineeringAssistanceEngine } from "./assistance";
+import { AutonomousPlanningEngine } from "./autonomy";
 import { ContextBuilder } from "./context";
 import { ExecutionCoordinator } from "./coordination";
 import { ControllerCore, DeferredControllerCore } from "./controller";
@@ -93,6 +94,13 @@ async function bootstrap(): Promise<void> {
   // Phase 8.9: same shape as runtimeDiagnosticsEngine above — zero
   // constructor dependencies, no ordering constraint, no seam needed.
   const runtimeReportingEngine = new RuntimeReportingEngine();
+  // Phase 9.1: same shape as recommendationEngine/engineeringAssistanceEngine
+  // above — zero constructor dependencies, no ordering constraint, no seam
+  // needed. Deliberately not passed to, or wired into, BackgroundRuntime,
+  // MonitoringWorker, ExecutionPipeline, ControllerCore, or Telegram
+  // anywhere in this file — Autonomous Planning stays reachable only through
+  // ApplicationService.getAutonomousPlan(), which nothing calls yet.
+  const autonomousPlanningEngine = new AutonomousPlanningEngine();
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist
@@ -120,6 +128,7 @@ async function bootstrap(): Promise<void> {
     runtimeReportingEngine,
     deferredRuntimeControlService,
     deferredRuntimeAdministrationService,
+    autonomousPlanningEngine,
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by

@@ -1,5 +1,6 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
 import type { RepositoryAssistanceReport } from "../assistance/types";
+import type { AutonomousPlan } from "../autonomy/types";
 import type { IRuntimeControlService } from "../control/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
@@ -19,6 +20,11 @@ export interface IApplicationService {
   getRecommendations(repositoryId?: string): Promise<RepositoryRecommendationReport>;
   getEngineeringAssistance(repositoryId?: string): Promise<RepositoryAssistanceReport>;
   getEngineeringWorkspace(repositoryId?: string): Promise<EngineeringWorkspace>;
+  // Phase 9.1: deliberately portfolio-wide, unlike every method above — it
+  // has no repositoryId parameter because Autonomous Planning's entire
+  // purpose is to reason across every registered repository at once, not
+  // report on one. Read-only and dormant: nothing calls this yet.
+  getAutonomousPlan(): Promise<AutonomousPlan>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.
