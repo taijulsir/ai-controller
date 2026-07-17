@@ -2,6 +2,8 @@ import { ApplicationService } from "../src/application/ApplicationService";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
@@ -172,6 +174,17 @@ class UnusedRuntimeAdministrationService implements IRuntimeAdministrationServic
     throw new Error("not used");
   }
 }
+class UnusedAutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
+  async record(): Promise<AutonomousPlanHistoryEntry> {
+    throw new Error("not used");
+  }
+  async getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined> {
+    throw new Error("not used");
+  }
+  async getHistory(): Promise<AutonomousPlanHistoryEntry[]> {
+    throw new Error("not used");
+  }
+}
 
 function assert(condition: boolean, message: string): void {
   console.log(`${condition ? "PASS" : "FAIL"} - ${message}`);
@@ -199,6 +212,7 @@ function buildService(monitor?: FakeProactiveMonitor) {
     new UnusedRuntimeControlService(),
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
+    new UnusedAutonomousPlanHistoryService(),
     monitor,
   );
   return { service, repositoryIntelligence, projectMemory, decisionEngine, recommendationEngine, engineeringAssistanceEngine };

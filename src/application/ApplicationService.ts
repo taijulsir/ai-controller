@@ -13,6 +13,8 @@ import type { RepositorySnapshot } from "../intelligence/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { IProactiveMonitor } from "../monitoring/interfaces";
+import type { IAutonomousPlanHistoryService } from "../planhistory/interfaces";
+import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { IRepositoryRegistry } from "../repositories/interfaces";
@@ -67,6 +69,15 @@ export class ApplicationService implements IApplicationService {
     // seam needed, since it never reaches back toward ApplicationService or
     // anything else.
     private readonly autonomousPlanningEngine: IAutonomousPlanningEngine,
+    // Phase 9.2: a real dependency, unlike autonomousPlanningEngine above —
+    // AutonomousPlanHistoryService owns disk I/O and recording, but this
+    // class only ever calls its two read methods (getHistory/getLatestEntry).
+    // It never calls record(): recording, and the decision of when a
+    // planning cycle should be recorded, belong to AutonomousPlanHistoryService
+    // and a future runtime/scheduler phase respectively — not to
+    // ApplicationService, which stays a read-only facade here exactly as it
+    // is for every other query it exposes.
+    private readonly autonomousPlanHistoryService: IAutonomousPlanHistoryService,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -207,6 +218,23 @@ export class ApplicationService implements IApplicationService {
       .filter((outcome): outcome is PromiseFulfilledResult<RepositoryRecommendationReport> => outcome.status === "fulfilled")
       .map((outcome) => outcome.value);
     return this.autonomousPlanningEngine.buildPlan(reports);
+  }
+
+  // Phase 9.2: pure delegation, no orchestration — AutonomousPlanHistoryService
+  // already assembles each AutonomousPlanHistoryEntry (plan + its evolution)
+  // at record time; this method exists only so future front-ends have one
+  // read-facade to depend on, matching every other query this class exposes.
+  async getAutonomousPlanHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]> {
+    return this.autonomousPlanHistoryService.getHistory(limit);
+  }
+
+  // Phase 9.2: pure delegation — the evolution for the most recently
+  // recorded cycle was computed once, at record time, and is read back
+  // verbatim here, never recomputed. undefined only when no cycle has ever
+  // been recorded yet (nothing in this phase records one).
+  async getLatestAutonomousPlanEvolution(): Promise<AutonomousPlanEvolutionReport | undefined> {
+    const latestEntry = await this.autonomousPlanHistoryService.getLatestEntry();
+    return latestEntry?.evolution;
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

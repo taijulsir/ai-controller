@@ -3,6 +3,9 @@ import type { IApplicationService } from "../src/application/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
+import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import { AttentionDispatcher } from "../src/attention/AttentionDispatcher";
@@ -279,6 +282,17 @@ class UnusedRuntimeAdministrationService implements IRuntimeAdministrationServic
     throw new Error("getRuntimeStatus() must not touch IRuntimeAdministrationService");
   }
 }
+class UnusedAutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
+  async record(): Promise<AutonomousPlanHistoryEntry> {
+    throw new Error("getRuntimeStatus() must not touch IAutonomousPlanHistoryService");
+  }
+  async getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined> {
+    throw new Error("getRuntimeStatus() must not touch IAutonomousPlanHistoryService");
+  }
+  async getHistory(): Promise<AutonomousPlanHistoryEntry[]> {
+    throw new Error("getRuntimeStatus() must not touch IAutonomousPlanHistoryService");
+  }
+}
 
 async function main(): Promise<void> {
   // RuntimeStatusService assembles all five sections from exactly the four
@@ -409,6 +423,8 @@ async function main(): Promise<void> {
       new RuntimeReportingEngine(),
       new UnusedRuntimeControlService(),
       new UnusedRuntimeAdministrationService(),
+      new AutonomousPlanningEngine(),
+      new UnusedAutonomousPlanHistoryService(),
     );
 
     let threw = false;

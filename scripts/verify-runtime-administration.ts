@@ -6,6 +6,9 @@ import { DeferredRuntimeAdministrationService } from "../src/admin/DeferredRunti
 import { RuntimeAdministrationServiceNotBoundError } from "../src/admin/errors";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import { RuntimeAdministrationService } from "../src/admin/RuntimeAdministrationService";
+import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IAttentionDispatcher } from "../src/attention/interfaces";
@@ -181,6 +184,17 @@ class UnusedRecommendationEngine implements IRecommendationEngine {
 class UnusedEngineeringAssistanceEngine implements IEngineeringAssistanceEngine {
   propose(): RepositoryAssistanceReport {
     throw new Error("getRuntimeAdministration() must not touch IEngineeringAssistanceEngine");
+  }
+}
+class UnusedAutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
+  async record(): Promise<AutonomousPlanHistoryEntry> {
+    throw new Error("getRuntimeAdministration() must not touch IAutonomousPlanHistoryService");
+  }
+  async getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined> {
+    throw new Error("getRuntimeAdministration() must not touch IAutonomousPlanHistoryService");
+  }
+  async getHistory(): Promise<AutonomousPlanHistoryEntry[]> {
+    throw new Error("getRuntimeAdministration() must not touch IAutonomousPlanHistoryService");
   }
 }
 class UnusedAttentionDispatcher implements IAttentionDispatcher {
@@ -385,6 +399,8 @@ async function main(): Promise<void> {
       new RuntimeReportingEngine(),
       new UnusedRuntimeControlService(),
       admin,
+      new AutonomousPlanningEngine(),
+      new UnusedAutonomousPlanHistoryService(),
     );
 
     let threw = false;

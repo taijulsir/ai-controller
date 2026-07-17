@@ -3,8 +3,13 @@ import type { Recommendation, RecommendationCategory, RecommendationPriority, Re
 import type { IAutonomousPlanningEngine } from "./interfaces";
 import type { AutonomousPlan, AutonomousPlanItem, PlanConfidence } from "./types";
 
-const PRIORITY_ORDER: Record<RecommendationPriority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
-const CATEGORY_ORDER: Record<RecommendationCategory, number> = { blocking: 0, advisory: 1, informational: 2 };
+// Exported so src/planhistory/AutonomousPlanEvolutionEngine.ts can reuse the
+// exact same urgency ordering when deciding whether an item escalated
+// between cycles, rather than defining a second table that could quietly
+// disagree with this one. Values/behavior of this module are otherwise
+// unchanged.
+export const PRIORITY_ORDER: Record<RecommendationPriority, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+export const CATEGORY_ORDER: Record<RecommendationCategory, number> = { blocking: 0, advisory: 1, informational: 2 };
 
 // Pure synthesis, same shape as RecommendationEngine/EngineeringAssistanceEngine/
 // PlanningEngine/ExecutionCoordinator: no constructor dependencies, no I/O,

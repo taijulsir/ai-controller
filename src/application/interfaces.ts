@@ -6,6 +6,7 @@ import type { RepositoryInsightReport } from "../decisions/types";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
+import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { ClaudeSessionInfo } from "../session/types";
@@ -25,6 +26,13 @@ export interface IApplicationService {
   // purpose is to reason across every registered repository at once, not
   // report on one. Read-only and dormant: nothing calls this yet.
   getAutonomousPlan(): Promise<AutonomousPlan>;
+  // Phase 9.2: read-only queries over recorded planning cycles. Neither
+  // method records anything — AutonomousPlanHistoryService owns record(),
+  // and this class never calls it; when a planning cycle should actually be
+  // recorded is a decision left to a future runtime/scheduler phase.
+  getAutonomousPlanHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]>;
+  // undefined only when no cycle has ever been recorded yet.
+  getLatestAutonomousPlanEvolution(): Promise<AutonomousPlanEvolutionReport | undefined>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

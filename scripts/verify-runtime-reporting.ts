@@ -1,6 +1,9 @@
 import type { IApplicationService } from "../src/application/interfaces";
 import { ApplicationService } from "../src/application/ApplicationService";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
+import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeControlService } from "../src/control/interfaces";
@@ -335,6 +338,17 @@ async function main(): Promise<void> {
       throw new Error("not used");
     }
   }
+  class UnusedAutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
+    async record(): Promise<AutonomousPlanHistoryEntry> {
+      throw new Error("not used");
+    }
+    async getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined> {
+      throw new Error("not used");
+    }
+    async getHistory(): Promise<AutonomousPlanHistoryEntry[]> {
+      throw new Error("not used");
+    }
+  }
 
   // Records every call — used to prove ApplicationService.getRuntimeReport()
   // fetches RuntimeStatus exactly once (never twice, and never via
@@ -384,6 +398,8 @@ async function main(): Promise<void> {
       reportingEngine,
       new UnusedRuntimeControlService(),
       new UnusedRuntimeAdministrationService(),
+      new AutonomousPlanningEngine(),
+      new UnusedAutonomousPlanHistoryService(),
     );
 
     applicationService.getRuntimeReport();

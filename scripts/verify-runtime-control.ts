@@ -3,6 +3,9 @@ import { ApplicationService } from "../src/application/ApplicationService";
 import type { IApplicationService } from "../src/application/interfaces";
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
+import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IAttentionDispatcher } from "../src/attention/interfaces";
@@ -174,6 +177,17 @@ class UnusedRuntimeAdministrationService implements IRuntimeAdministrationServic
   }
   getPolicies(): RuntimePolicyStatus {
     throw new Error("getRuntimeControl() must not touch IRuntimeAdministrationService");
+  }
+}
+class UnusedAutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
+  async record(): Promise<AutonomousPlanHistoryEntry> {
+    throw new Error("getRuntimeControl() must not touch IAutonomousPlanHistoryService");
+  }
+  async getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined> {
+    throw new Error("getRuntimeControl() must not touch IAutonomousPlanHistoryService");
+  }
+  async getHistory(): Promise<AutonomousPlanHistoryEntry[]> {
+    throw new Error("getRuntimeControl() must not touch IAutonomousPlanHistoryService");
   }
 }
 
@@ -366,6 +380,8 @@ async function main(): Promise<void> {
       new RuntimeReportingEngine(),
       control,
       new UnusedRuntimeAdministrationService(),
+      new AutonomousPlanningEngine(),
+      new UnusedAutonomousPlanHistoryService(),
     );
 
     let threw = false;

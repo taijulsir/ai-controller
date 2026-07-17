@@ -17,6 +17,7 @@ import { RepositoryIntelligenceService } from "./intelligence";
 import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor } from "./monitoring";
 import { TaskPlanner, WorkflowFactory } from "./planner";
+import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./planhistory";
 import { ExecutionPipeline } from "./pipeline";
 import { PlanningEngine } from "./planning";
 import { WorkflowOrchestrator, WorkflowRegistry } from "./orchestration";
@@ -101,6 +102,18 @@ async function bootstrap(): Promise<void> {
   // anywhere in this file — Autonomous Planning stays reachable only through
   // ApplicationService.getAutonomousPlan(), which nothing calls yet.
   const autonomousPlanningEngine = new AutonomousPlanningEngine();
+  // Phase 9.2: AutonomousPlanEvolutionEngine is a pure transform, same shape
+  // as autonomousPlanningEngine above — zero constructor dependencies, no
+  // ordering constraint, no seam needed. AutonomousPlanHistoryService is a
+  // real dependency (disk I/O via configService, reused for
+  // ControllerConfig.memory.directory the same way ProjectMemoryService is,
+  // under a distinct file) but has no ordering constraint either: it depends
+  // only on configService and autonomousPlanEvolutionEngine, both already
+  // built. Its record() method is never called anywhere in this file —
+  // deciding when a planning cycle should be recorded is left to a future
+  // runtime/scheduler phase, not to bootstrap.
+  const autonomousPlanEvolutionEngine = new AutonomousPlanEvolutionEngine();
+  const autonomousPlanHistoryService = new AutonomousPlanHistoryService(configService, autonomousPlanEvolutionEngine);
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist
@@ -129,6 +142,7 @@ async function bootstrap(): Promise<void> {
     deferredRuntimeControlService,
     deferredRuntimeAdministrationService,
     autonomousPlanningEngine,
+    autonomousPlanHistoryService,
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
