@@ -45,7 +45,30 @@ export interface IAutonomousPlanCycleRecorder {
   recordAutonomousPlanCycle(): Promise<AutonomousPlanHistoryEntry>;
 }
 
-export interface IApplicationService extends IAutonomousPlanCycleRecorder {
+// Phase 11: the narrow, read-only view of IApplicationService's one
+// scheduling query, carved out specifically for AutonomousExecutionOrchestrator
+// (src/autonomousexecution/AutonomousExecutionOrchestrator.ts) — so that
+// class's read dependency is capable of nothing except reading the
+// schedule, never getRuntimeControl()/getRuntimeAdministration()/any other
+// IApplicationService surface. This matters more here than it did for
+// IAutonomousPlanCycleRecorder (Phase 10.1): AutonomousExecutionOrchestrator
+// already holds one broad, dangerous capability (IExecutionPipeline) — an
+// unrelated second one (runtime control) reachable through its other
+// dependency would be the least likely kind of mistake for review to catch,
+// precisely because the class already legitimately does dangerous things.
+// ApplicationService requires no change to satisfy this: it already
+// implements a method with this exact name and signature, and
+// IApplicationService below extends this interface rather than redeclaring
+// the method, so there is exactly one declaration of it, not two.
+export interface IAutonomousPlanScheduleProvider {
+  // Phase 9.8's own method, unchanged — see its doc comment on
+  // IApplicationService below for what it does. Exposed here as its own
+  // narrow interface so a consumer whose only legitimate need is "read the
+  // schedule" never gains type-level access to anything else.
+  getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport>;
+}
+
+export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAutonomousPlanScheduleProvider {
   getRepositoryStatus(repositoryId?: string): Promise<RepositorySnapshot>;
   getRepositoryHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]>;
   getRepositoryInsights(repositoryId?: string): Promise<RepositoryInsightReport>;
@@ -105,8 +128,10 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder {
   // infrequent — per already-sequenced item, preserving Plan Sequencing's
   // order verbatim. No duration, interval, timer, or runtime policy
   // concept. The one place this class composes across the Plan Sequencing
-  // and Scheduling domains.
-  getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport>;
+  // and Scheduling domains. Declared on IAutonomousPlanScheduleProvider
+  // above, which this interface extends — see that interface's own doc
+  // comment.
+  //
   // recordAutonomousPlanCycle() lives on IAutonomousPlanCycleRecorder above,
   // which this interface extends — see that interface's own doc comment.
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
