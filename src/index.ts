@@ -21,6 +21,7 @@ import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./p
 import { AutonomousPlanningAnalysisEngine } from "./plananalysis";
 import { AutonomousPlanningService } from "./plan";
 import { AutonomousPlanReadinessEngine } from "./planreadiness";
+import { AutonomousPlanSequencingEngine } from "./plansequencing";
 import { AutonomousPlanStateEngine } from "./planstate";
 import { ExecutionPipeline } from "./pipeline";
 import { PlanningEngine } from "./planning";
@@ -152,6 +153,14 @@ async function bootstrap(): Promise<void> {
   // this engine and autonomousPlanningService meet, via
   // getAutonomousPlanReadiness()'s own cross-domain composition.
   const autonomousPlanReadinessEngine = new AutonomousPlanReadinessEngine();
+  // Phase 9.7: AutonomousPlanSequencingEngine is a pure transform, same
+  // shape as every other engine above — zero constructor dependencies, no
+  // ordering constraint, no seam needed. Deliberately NOT a constructor
+  // dependency of autonomousPlanReadinessEngine above (a new, separate
+  // domain, not part of Readiness) — ApplicationService is the only place
+  // this engine and autonomousPlanReadinessEngine meet, via
+  // getAutonomousPlanSequence()'s own cross-domain composition.
+  const autonomousPlanSequencingEngine = new AutonomousPlanSequencingEngine();
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist
@@ -182,6 +191,7 @@ async function bootstrap(): Promise<void> {
     autonomousPlanningEngine,
     autonomousPlanningService,
     autonomousPlanReadinessEngine,
+    autonomousPlanSequencingEngine,
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by

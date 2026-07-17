@@ -9,6 +9,7 @@ import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateE
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
+import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
@@ -219,6 +220,7 @@ function buildService(monitor?: FakeProactiveMonitor) {
     new AutonomousPlanningEngine(),
     new AutonomousPlanningService(new UnusedAutonomousPlanHistoryService(), new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()), new AutonomousPlanningAnalysisEngine()),
     new AutonomousPlanReadinessEngine(),
+    new AutonomousPlanSequencingEngine(),
     monitor,
   );
   return { service, repositoryIntelligence, projectMemory, decisionEngine, recommendationEngine, engineeringAssistanceEngine };

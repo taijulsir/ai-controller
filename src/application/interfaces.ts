@@ -10,6 +10,7 @@ import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "
 import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
+import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
@@ -61,6 +62,13 @@ export interface IApplicationService {
   // review requirement, approval, or eligibility decision. The one place
   // this class composes across the Planning and Readiness domains.
   getAutonomousPlanReadiness(limit?: number): Promise<AutonomousPlanReadinessReport>;
+  // Phase 9.7: a deterministic, descriptive ordering of Readiness-assessed
+  // items — ranked by readiness level (never score), then cycle count,
+  // then repositoryId, then sourceRecommendationKind. No timing, cadence,
+  // interval, scheduling, approval, eligibility, or execution concept.
+  // The one place this class composes across the Readiness and Plan
+  // Sequencing domains.
+  getAutonomousPlanSequence(limit?: number): Promise<AutonomousPlanSequencingReport>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

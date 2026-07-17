@@ -19,6 +19,8 @@ import type { IAutonomousPlanningService } from "../plan/interfaces";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { IAutonomousPlanReadinessEngine } from "../planreadiness/interfaces";
 import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
+import type { IAutonomousPlanSequencingEngine } from "../plansequencing/interfaces";
+import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
@@ -97,6 +99,14 @@ export class ApplicationService implements IApplicationService {
     // refinement, which was specifically about not re-deriving a use case
     // that belongs inside a single domain's own façade.
     private readonly readinessEngine: IAutonomousPlanReadinessEngine,
+    // Phase 9.7: a new domain, not part of Readiness — see
+    // AutonomousPlanSequencingEngine's own doc comment for why it stays
+    // separate. Zero constructor dependencies of its own — no deferred seam
+    // needed. getAutonomousPlanSequence() below is the one place this class
+    // composes across Readiness and Sequencing, the same cross-domain role
+    // it already plays for getAutonomousPlanReadiness() (Planning +
+    // Readiness) and getEngineeringWorkspace().
+    private readonly sequencingEngine: IAutonomousPlanSequencingEngine,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -322,6 +332,17 @@ export class ApplicationService implements IApplicationService {
       this.autonomousPlanningService.getAnalysis(limit),
     ]);
     return this.readinessEngine.assess(snapshot, analysis);
+  }
+
+  // Phase 9.7: the one place the Readiness domain and the Plan Sequencing
+  // domain meet. Fetches the readiness report exactly once (itself already
+  // fetch-once internally) and hands it to the pure
+  // AutonomousPlanSequencingEngine — never a second, independent readiness
+  // fetch. Purely descriptive: an ordering fact, never a timing, cadence,
+  // approval, eligibility, or execution decision.
+  async getAutonomousPlanSequence(limit?: number): Promise<AutonomousPlanSequencingReport> {
+    const readiness = await this.getAutonomousPlanReadiness(limit);
+    return this.sequencingEngine.sequence(readiness);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

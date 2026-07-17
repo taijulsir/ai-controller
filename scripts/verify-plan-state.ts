@@ -2,6 +2,8 @@ import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlan
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
+import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
+import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
 import type { AutonomousPlan, AutonomousPlanItem } from "../src/autonomy/types";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import type { AutonomousPlanCycleSummary } from "../src/plan/types";
@@ -441,6 +443,8 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
       new UnusedRuntimeAdministrationService(),
       new AutonomousPlanningEngine(),
       autonomousPlanningService,
+      new AutonomousPlanReadinessEngine(),
+      new AutonomousPlanSequencingEngine(),
     );
   }
 
@@ -469,6 +473,8 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
     new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine, new AutonomousPlanningAnalysisEngine()),
+    new AutonomousPlanReadinessEngine(),
+    new AutonomousPlanSequencingEngine(),
   );
   const noCurrent = await noHistoryService.getCurrentPlanState();
   assert(noCurrent === undefined, "no cycle ever recorded -> getCurrentPlanState() is undefined, not a fabricated state");

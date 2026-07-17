@@ -25,6 +25,7 @@ import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
+import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { IRecommendationEngine } from "../src/recommendations/interfaces";
@@ -401,6 +402,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new AutonomousPlanningEngine(),
     autonomousPlanningService,
     new AutonomousPlanReadinessEngine(),
+    new AutonomousPlanSequencingEngine(),
   );
 
   const history = await applicationService.getAutonomousPlanHistory();
@@ -438,6 +440,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new AutonomousPlanningEngine(),
     new AutonomousPlanningService(emptyHistoryService, new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()), new AutonomousPlanningAnalysisEngine()),
     new AutonomousPlanReadinessEngine(),
+    new AutonomousPlanSequencingEngine(),
   );
   const noEvolution = await applicationService2.getLatestAutonomousPlanEvolution();
   assert(noEvolution === undefined, "no cycle ever recorded -> getLatestAutonomousPlanEvolution() is undefined, not a fabricated report");
