@@ -2,6 +2,7 @@ import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlan
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
+import { AutonomousPlanRecordingService } from "../src/planrecording/AutonomousPlanRecordingService";
 import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
 import { AutonomousPlanSchedulingEngine } from "../src/scheduling/AutonomousPlanSchedulingEngine";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
@@ -372,6 +373,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
   const analysisEngine = new AutonomousPlanningAnalysisEngine();
   const autonomousPlanningService = new AutonomousPlanningService(historyService, stateEngine, analysisEngine);
   const readinessEngine = new AutonomousPlanReadinessEngine();
+  const recordingService = new AutonomousPlanRecordingService(historyService);
 
   const applicationService: IApplicationService = new ApplicationService(
     new FakeRepositoryIntelligence(),
@@ -391,6 +393,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     readinessEngine,
     new AutonomousPlanSequencingEngine(),
     new AutonomousPlanSchedulingEngine(),
+    recordingService,
   );
 
   const report = await applicationService.getAutonomousPlanReadiness();
@@ -439,6 +442,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
       readinessEngine,
       new AutonomousPlanSequencingEngine(),
       new AutonomousPlanSchedulingEngine(),
+      new AutonomousPlanRecordingService(emptyHistoryService),
     );
     const emptyReport = await emptyApplicationService.getAutonomousPlanReadiness();
     assert(emptyReport.items.length === 0, "no registered repositories -> an empty live plan -> no items assessed");

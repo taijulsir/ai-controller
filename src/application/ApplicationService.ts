@@ -19,6 +19,7 @@ import type { IAutonomousPlanningService } from "../plan/interfaces";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { IAutonomousPlanReadinessEngine } from "../planreadiness/interfaces";
 import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
+import type { IAutonomousPlanRecordingService } from "../planrecording/interfaces";
 import type { IAutonomousPlanSequencingEngine } from "../plansequencing/interfaces";
 import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
@@ -116,6 +117,16 @@ export class ApplicationService implements IApplicationService {
     // composes across Plan Sequencing and Scheduling, the same cross-domain
     // role it already plays at every prior seam in this chain.
     private readonly schedulingEngine: IAutonomousPlanSchedulingEngine,
+    // Phase 10: the first write-capable dependency this class holds. Zero
+    // constructor dependencies of its own beyond IAutonomousPlanHistoryService
+    // (not visible from here — this class only ever sees the
+    // IAutonomousPlanRecordingService abstraction). Deliberately separate
+    // from autonomousPlanningService above: that façade's own doc comment
+    // treats never calling record() as a permanent property of itself, so
+    // the write path is a sibling this class composes with directly, not a
+    // method added to the read façade. recordAutonomousPlanCycle() below is
+    // the one place this class and this dependency meet.
+    private readonly recordingService: IAutonomousPlanRecordingService,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -249,6 +260,10 @@ export class ApplicationService implements IApplicationService {
   // RepositoryIntelligenceService already established for its own
   // multi-source fan-out. The pure AutonomousPlanningEngine only ever sees
   // the reports that actually succeeded.
+  //
+  // As of Phase 10, also the exact live-plan source recordAutonomousPlanCycle()
+  // below reuses — no second, independent synthesis path exists anywhere in
+  // this class.
   async getAutonomousPlan(): Promise<AutonomousPlan> {
     const repositories = this.repositoryRegistry.getAllRepositories();
     const settled = await Promise.allSettled(repositories.map((repository) => this.getRecommendations(repository.id)));
@@ -363,6 +378,19 @@ export class ApplicationService implements IApplicationService {
   async getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport> {
     const sequence = await this.getAutonomousPlanSequence(limit);
     return this.schedulingEngine.schedule(sequence);
+  }
+
+  // Phase 10: the first write operation this class performs anywhere —
+  // every method above this one, and every method below it, only ever
+  // reads. Fetches the live plan via getAutonomousPlan() (the exact same
+  // call every other Autonomous Planning method reuses, no second synthesis
+  // path), then hands it to AutonomousPlanRecordingService, which owns the
+  // rest of the write itself. This class never touches
+  // IAutonomousPlanHistoryService directly — the write is delegated in
+  // full, not partially performed here.
+  async recordAutonomousPlanCycle(): Promise<AutonomousPlanHistoryEntry> {
+    const livePlan = await this.getAutonomousPlan();
+    return this.recordingService.recordAutonomousPlanCycle(livePlan);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

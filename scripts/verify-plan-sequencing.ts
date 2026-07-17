@@ -2,6 +2,7 @@ import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlan
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
+import { AutonomousPlanRecordingService } from "../src/planrecording/AutonomousPlanRecordingService";
 import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
 import { AutonomousPlanSchedulingEngine } from "../src/scheduling/AutonomousPlanSchedulingEngine";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
@@ -346,6 +347,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
   const readinessEngine = new AutonomousPlanReadinessEngine();
   const sequencingEngine = new AutonomousPlanSequencingEngine();
   const schedulingEngine = new AutonomousPlanSchedulingEngine();
+  const recordingService = new AutonomousPlanRecordingService(historyService);
 
   const applicationService: IApplicationService = new ApplicationService(
     new FakeRepositoryIntelligence(),
@@ -365,6 +367,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     readinessEngine,
     sequencingEngine,
     schedulingEngine,
+    recordingService,
   );
 
   const sequenceReport = await applicationService.getAutonomousPlanSequence();
@@ -408,6 +411,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
       readinessEngine,
       sequencingEngine,
       schedulingEngine,
+      new AutonomousPlanRecordingService(emptyHistoryService),
     );
     const emptySequence = await emptyApplicationService.getAutonomousPlanSequence();
     assert(emptySequence.entries.length === 0, "no registered repositories -> an empty live plan -> an empty sequence");

@@ -10,10 +10,15 @@ export interface IAutonomousPlanEvolutionEngine {
 }
 
 export interface IAutonomousPlanHistoryService {
-  // The one place a planning cycle is recorded. Nothing in this phase calls
-  // it — it exists, fully implemented and independently testable, for a
-  // future runtime/scheduler phase to decide when a cycle should actually be
-  // recorded. That decision is explicitly out of scope here.
+  // The one place a planning cycle is recorded. As of Phase 10, its one
+  // caller is AutonomousPlanRecordingService (src/planrecording), itself
+  // reached only via ApplicationService.recordAutonomousPlanCycle() — no
+  // read-facing code (AutonomousPlanningService, ApplicationService's own
+  // get*() methods) calls it directly, and nothing in this codebase invokes
+  // recordAutonomousPlanCycle() automatically yet. Deciding when a cycle
+  // should actually be recorded on an ongoing basis remains a future
+  // runtime/scheduler phase's decision — Phase 10 only made the capability
+  // explicit and callable.
   record(plan: AutonomousPlan): Promise<AutonomousPlanHistoryEntry>;
   getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined>;
   getHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]>;

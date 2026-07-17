@@ -30,12 +30,17 @@ export interface IApplicationService {
   // Phase 9.1: deliberately portfolio-wide, unlike every method above — it
   // has no repositoryId parameter because Autonomous Planning's entire
   // purpose is to reason across every registered repository at once, not
-  // report on one. Read-only and dormant: nothing calls this yet.
+  // report on one. Read-only itself — synthesizing a live plan records
+  // nothing — though as of Phase 10 it is also the first step of
+  // recordAutonomousPlanCycle() below, which fetches a live plan via this
+  // exact method before handing it to AutonomousPlanRecordingService.
   getAutonomousPlan(): Promise<AutonomousPlan>;
   // Phase 9.2: read-only queries over recorded planning cycles. Neither
-  // method records anything — AutonomousPlanHistoryService owns record(),
-  // and this class never calls it; when a planning cycle should actually be
-  // recorded is a decision left to a future runtime/scheduler phase.
+  // method records anything itself — AutonomousPlanHistoryService owns
+  // record(), and these two methods never call it. As of Phase 10, the one
+  // place this class does call it is recordAutonomousPlanCycle() below,
+  // routed through AutonomousPlanRecordingService rather than either of
+  // these query methods.
   getAutonomousPlanHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]>;
   // undefined only when no cycle has ever been recorded yet.
   getLatestAutonomousPlanEvolution(): Promise<AutonomousPlanEvolutionReport | undefined>;
@@ -76,6 +81,19 @@ export interface IApplicationService {
   // concept. The one place this class composes across the Plan Sequencing
   // and Scheduling domains.
   getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport>;
+  // Phase 10: the first, and only, write operation this class exposes —
+  // named recordAutonomousPlanCycle(), not getX(), so it reads unambiguously
+  // as a write at every call site, unlike every other method here. Fetches
+  // the live plan via this class's own getAutonomousPlan() (unchanged, no
+  // second synthesis path), then delegates the write itself to
+  // AutonomousPlanRecordingService — this class never touches
+  // IAutonomousPlanHistoryService directly. Nothing in this codebase calls
+  // this method automatically yet; deciding when a cycle should actually be
+  // recorded remains a future runtime/scheduler phase's decision, same as
+  // the deferred comment on AutonomousPlanHistoryService.record() always
+  // said — this is that deferred capability made explicit and callable, not
+  // that future scheduling decision itself.
+  recordAutonomousPlanCycle(): Promise<AutonomousPlanHistoryEntry>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

@@ -37,9 +37,13 @@ function reviveDates(_key: string, value: unknown): unknown {
 // cycle is a historical fact fixed at the moment that cycle is recorded, not
 // something recomputed later), so this service, not ApplicationService,
 // owns calling it. record() is the only place a planning cycle is ever
-// written — nothing in this phase calls it; it is exercised only by its own
-// verification script, ready for a future runtime/scheduler phase to decide
-// when a cycle should actually be recorded.
+// written. As of Phase 10, its one caller is AutonomousPlanRecordingService
+// (src/planrecording), reached from live code via
+// ApplicationService.recordAutonomousPlanCycle() — nothing invokes that
+// method automatically yet, so deciding when a cycle should actually be
+// recorded on an ongoing basis remains a future runtime/scheduler phase's
+// decision, same as always; Phase 10 only made the write itself explicit
+// and callable.
 export class AutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
   constructor(
     private readonly configService: IConfigService,

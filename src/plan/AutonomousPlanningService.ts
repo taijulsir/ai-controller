@@ -27,9 +27,11 @@ import type { AutonomousPlanCycleSummary, AutonomousPlanningSnapshot } from "./t
 // class its own way to fetch a live plan.
 //
 // Never calls record() on the injected IAutonomousPlanHistoryService, even
-// though that interface exposes it — recording, and when a planning cycle
-// should be recorded, remain outside this class entirely, same as they are
-// for ApplicationService itself.
+// though that interface exposes it — a permanent property of this class,
+// not a temporary one. As of Phase 10, ApplicationService does record a
+// planning cycle (via recordAutonomousPlanCycle()), but it does so through
+// the sibling AutonomousPlanRecordingService (src/planrecording), never
+// through this façade — this class's own read-only boundary is unaffected.
 //
 // Phase 9.5: owns the orchestration of the "analyze recent cycles" use case
 // (fetch the window once via getRecentCycles(), hand it to the pure

@@ -25,6 +25,7 @@ import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
+import { AutonomousPlanRecordingService } from "../src/planrecording/AutonomousPlanRecordingService";
 import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
 import { AutonomousPlanSchedulingEngine } from "../src/scheduling/AutonomousPlanSchedulingEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
@@ -386,6 +387,10 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
     new AutonomousPlanningAnalysisEngine(),
   );
+  // Phase 10: reuses this exact same fakeHistoryService instance, mirroring
+  // the composition root -- and lets the recordCalls assertions below cover
+  // the full chain, not just the read façade.
+  const recordingService = new AutonomousPlanRecordingService(fakeHistoryService);
 
   const applicationService: IApplicationService = new ApplicationService(
     new UnusedRepositoryIntelligenceService(),
@@ -405,6 +410,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new AutonomousPlanReadinessEngine(),
     new AutonomousPlanSequencingEngine(),
     new AutonomousPlanSchedulingEngine(),
+    recordingService,
   );
 
   const history = await applicationService.getAutonomousPlanHistory();
@@ -444,6 +450,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new AutonomousPlanReadinessEngine(),
     new AutonomousPlanSequencingEngine(),
     new AutonomousPlanSchedulingEngine(),
+    new AutonomousPlanRecordingService(emptyHistoryService),
   );
   const noEvolution = await applicationService2.getLatestAutonomousPlanEvolution();
   assert(noEvolution === undefined, "no cycle ever recorded -> getLatestAutonomousPlanEvolution() is undefined, not a fabricated report");

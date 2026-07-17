@@ -21,6 +21,7 @@ import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./p
 import { AutonomousPlanningAnalysisEngine } from "./plananalysis";
 import { AutonomousPlanningService } from "./plan";
 import { AutonomousPlanReadinessEngine } from "./planreadiness";
+import { AutonomousPlanRecordingService } from "./planrecording";
 import { AutonomousPlanSequencingEngine } from "./plansequencing";
 import { AutonomousPlanStateEngine } from "./planstate";
 import { AutonomousPlanSchedulingEngine } from "./scheduling";
@@ -115,8 +116,11 @@ async function bootstrap(): Promise<void> {
   // ControllerConfig.memory.directory the same way ProjectMemoryService is,
   // under a distinct file) but has no ordering constraint either: it depends
   // only on configService and autonomousPlanEvolutionEngine, both already
-  // built. Its record() method is never called anywhere in this file —
-  // deciding when a planning cycle should be recorded is left to a future
+  // built. As of Phase 10, its record() method is reachable — via
+  // autonomousPlanRecordingService below, itself reached only through
+  // ApplicationService.recordAutonomousPlanCycle() — but nothing in this
+  // file calls that method; deciding when a planning cycle should actually
+  // be recorded on an ongoing basis is still left to a future
   // runtime/scheduler phase, not to bootstrap.
   const autonomousPlanEvolutionEngine = new AutonomousPlanEvolutionEngine();
   const autonomousPlanHistoryService = new AutonomousPlanHistoryService(configService, autonomousPlanEvolutionEngine);
@@ -170,6 +174,14 @@ async function bootstrap(): Promise<void> {
   // place this engine and autonomousPlanSequencingEngine meet, via
   // getAutonomousPlanSchedule()'s own cross-domain composition.
   const autonomousPlanSchedulingEngine = new AutonomousPlanSchedulingEngine();
+  // Phase 10: AutonomousPlanRecordingService reuses this exact same
+  // autonomousPlanHistoryService instance built above for Phase 9.2 — no
+  // second instance, no second file, no new resource. Deliberately not a
+  // constructor dependency of autonomousPlanningService (the read façade) —
+  // it is that façade's sibling on the write side, meeting it only inside
+  // ApplicationService.recordAutonomousPlanCycle(). No ordering constraint,
+  // no seam needed: its one dependency already exists.
+  const autonomousPlanRecordingService = new AutonomousPlanRecordingService(autonomousPlanHistoryService);
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist
@@ -202,6 +214,7 @@ async function bootstrap(): Promise<void> {
     autonomousPlanReadinessEngine,
     autonomousPlanSequencingEngine,
     autonomousPlanSchedulingEngine,
+    autonomousPlanRecordingService,
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
