@@ -22,6 +22,8 @@ import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
 import type { IAutonomousPlanSequencingEngine } from "../plansequencing/interfaces";
 import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
+import type { IAutonomousPlanSchedulingEngine } from "../scheduling/interfaces";
+import type { AutonomousPlanSchedulingReport } from "../scheduling/types";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { IRepositoryRegistry } from "../repositories/interfaces";
@@ -107,6 +109,13 @@ export class ApplicationService implements IApplicationService {
     // it already plays for getAutonomousPlanReadiness() (Planning +
     // Readiness) and getEngineeringWorkspace().
     private readonly sequencingEngine: IAutonomousPlanSequencingEngine,
+    // Phase 9.8: a new domain, not part of Plan Sequencing — see
+    // AutonomousPlanSchedulingEngine's own doc comment for why it stays
+    // separate. Zero constructor dependencies of its own — no deferred seam
+    // needed. getAutonomousPlanSchedule() below is the one place this class
+    // composes across Plan Sequencing and Scheduling, the same cross-domain
+    // role it already plays at every prior seam in this chain.
+    private readonly schedulingEngine: IAutonomousPlanSchedulingEngine,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -343,6 +352,17 @@ export class ApplicationService implements IApplicationService {
   async getAutonomousPlanSequence(limit?: number): Promise<AutonomousPlanSequencingReport> {
     const readiness = await this.getAutonomousPlanReadiness(limit);
     return this.sequencingEngine.sequence(readiness);
+  }
+
+  // Phase 9.8: the one place the Plan Sequencing domain and the Scheduling
+  // domain meet. Fetches the sequence report exactly once (itself already
+  // fetch-once internally) and hands it to the pure
+  // AutonomousPlanSchedulingEngine — never a second, independent sequence
+  // fetch. Purely a cadence classification: never a duration, interval,
+  // timer, approval, eligibility, or execution decision.
+  async getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport> {
+    const sequence = await this.getAutonomousPlanSequence(limit);
+    return this.schedulingEngine.schedule(sequence);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

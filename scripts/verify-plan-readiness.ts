@@ -3,6 +3,7 @@ import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/Autonomous
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
 import { AutonomousPlanSequencingEngine } from "../src/plansequencing/AutonomousPlanSequencingEngine";
+import { AutonomousPlanSchedulingEngine } from "../src/scheduling/AutonomousPlanSchedulingEngine";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
 import { ApplicationService } from "../src/application/ApplicationService";
@@ -389,6 +390,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     autonomousPlanningService,
     readinessEngine,
     new AutonomousPlanSequencingEngine(),
+    new AutonomousPlanSchedulingEngine(),
   );
 
   const report = await applicationService.getAutonomousPlanReadiness();
@@ -436,6 +438,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
       emptyPlanningService,
       readinessEngine,
       new AutonomousPlanSequencingEngine(),
+      new AutonomousPlanSchedulingEngine(),
     );
     const emptyReport = await emptyApplicationService.getAutonomousPlanReadiness();
     assert(emptyReport.items.length === 0, "no registered repositories -> an empty live plan -> no items assessed");

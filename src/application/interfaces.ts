@@ -12,6 +12,7 @@ import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
 import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
+import type { AutonomousPlanSchedulingReport } from "../scheduling/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { ClaudeSessionInfo } from "../session/types";
@@ -69,6 +70,12 @@ export interface IApplicationService {
   // The one place this class composes across the Readiness and Plan
   // Sequencing domains.
   getAutonomousPlanSequence(limit?: number): Promise<AutonomousPlanSequencingReport>;
+  // Phase 9.8: a cadence classification only — frequent, periodic, or
+  // infrequent — per already-sequenced item, preserving Plan Sequencing's
+  // order verbatim. No duration, interval, timer, or runtime policy
+  // concept. The one place this class composes across the Plan Sequencing
+  // and Scheduling domains.
+  getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

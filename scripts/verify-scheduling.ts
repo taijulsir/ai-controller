@@ -11,7 +11,7 @@ import type { IApplicationService } from "../src/application/interfaces";
 import type { AutonomousPlan, AutonomousPlanItem } from "../src/autonomy/types";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
-import type { AutonomousPlanItemReadiness, AutonomousPlanReadinessReport } from "../src/planreadiness/types";
+import type { AutonomousPlanSequencingEntry, AutonomousPlanSequencingReport } from "../src/plansequencing/types";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
@@ -37,146 +37,116 @@ function assert(condition: boolean, message: string): void {
   console.log(`${condition ? "PASS" : "FAIL"} - ${message}`);
 }
 
-function readinessItem(overrides: Partial<AutonomousPlanItemReadiness> & Pick<AutonomousPlanItemReadiness, "repositoryId" | "sourceRecommendationKind" | "level">): AutonomousPlanItemReadiness {
-  return {
-    confidence: "medium",
-    observedIndicators: [],
-    cycleCount: 0,
-    score: 0,
-    ...overrides,
-  };
+function sequencingEntry(overrides: Partial<AutonomousPlanSequencingEntry> & Pick<AutonomousPlanSequencingEntry, "repositoryId" | "sourceRecommendationKind" | "level">): AutonomousPlanSequencingEntry {
+  return { cycleCount: 0, ...overrides };
 }
 
-function readinessReport(items: AutonomousPlanItemReadiness[], currentness: AutonomousPlanReadinessReport["summary"]["currentness"] = "current"): AutonomousPlanReadinessReport {
+function sequencingReport(entries: AutonomousPlanSequencingEntry[], currentness: AutonomousPlanSequencingReport["summary"]["currentness"] = "current"): AutonomousPlanSequencingReport {
   const levelBreakdown = { high: 0, medium: 0, low: 0 };
-  for (const item of items) {
-    levelBreakdown[item.level] += 1;
+  for (const entry of entries) {
+    levelBreakdown[entry.level] += 1;
   }
   return {
     generatedAt: new Date(),
-    summary: { itemsAssessed: items.length, currentness, confidenceBreakdown: { high: 0, medium: 0, low: 0 }, levelBreakdown, averageScore: 0 },
-    items,
+    summary: { entriesSequenced: entries.length, currentness, levelBreakdown },
+    entries,
   };
 }
 
-function verifyAutonomousPlanSequencingEngine(): void {
-  const engine = new AutonomousPlanSequencingEngine();
+function verifyAutonomousPlanSchedulingEngine(): void {
+  const engine = new AutonomousPlanSchedulingEngine();
 
-  // Empty readiness -> empty sequence
+  // Empty sequence -> empty schedule
   {
-    const report = engine.sequence(readinessReport([]));
-    assert(report.entries.length === 0, "no readiness items -> empty entries, not a fabricated fallback");
-    assert(report.summary.entriesSequenced === 0, "no readiness items -> entriesSequenced is 0");
+    const report = engine.schedule(sequencingReport([]));
+    assert(report.entries.length === 0, "no sequenced entries -> empty entries, not a fabricated fallback");
+    assert(report.summary.entriesScheduled === 0, "no sequenced entries -> entriesScheduled is 0");
   }
 
-  // Primary key: readiness level, low before medium before high
+  // Cadence classification: low -> frequent, medium -> periodic, high -> infrequent
   {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "high" }),
-      readinessItem({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "low" }),
-      readinessItem({ repositoryId: "gamma", sourceRecommendationKind: "PullRequired", level: "medium" }),
-    ];
-    const report = engine.sequence(readinessReport(items));
-    assert(report.entries[0].repositoryId === "beta" && report.entries[0].level === "low", "low readiness level sorts first");
-    assert(report.entries[1].repositoryId === "gamma" && report.entries[1].level === "medium", "medium readiness level sorts second");
-    assert(report.entries[2].repositoryId === "alpha" && report.entries[2].level === "high", "high readiness level sorts last");
+    const low = engine.schedule(sequencingReport([sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low" })]));
+    assert(low.entries[0].cadence === "frequent", "readiness level low -> cadence frequent");
+  }
+  {
+    const medium = engine.schedule(sequencingReport([sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium" })]));
+    assert(medium.entries[0].cadence === "periodic", "readiness level medium -> cadence periodic");
+  }
+  {
+    const high = engine.schedule(sequencingReport([sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "high" })]));
+    assert(high.entries[0].cadence === "infrequent", "readiness level high -> cadence infrequent");
   }
 
-  // Secondary key: cycleCount descending, within the same level
+  // Order preservation: Scheduling never re-sorts Plan Sequencing's own order
   {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 2 }),
-      readinessItem({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 5 }),
+    const entries = [
+      sequencingEntry({ repositoryId: "gamma", sourceRecommendationKind: "PullRequired", level: "high" }),
+      sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low" }),
+      sequencingEntry({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "medium" }),
     ];
-    const report = engine.sequence(readinessReport(items));
-    assert(report.entries[0].repositoryId === "beta" && report.entries[0].cycleCount === 5, "within the same level, the longer-observed concern (higher cycleCount) sorts first");
-    assert(report.entries[1].repositoryId === "alpha" && report.entries[1].cycleCount === 2, "the shorter-observed concern sorts second");
-  }
-
-  // Tertiary key: repositoryId alphabetically, when level and cycleCount tie
-  {
-    const items = [
-      readinessItem({ repositoryId: "zulu", sourceRecommendationKind: "PullRequired", level: "low", cycleCount: 1 }),
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low", cycleCount: 1 }),
-    ];
-    const report = engine.sequence(readinessReport(items));
-    assert(report.entries[0].repositoryId === "alpha" && report.entries[1].repositoryId === "zulu", "equal level and cycleCount -> repositoryId breaks the tie alphabetically");
-  }
-
-  // Quaternary key: sourceRecommendationKind alphabetically, when everything else ties
-  {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", level: "low", cycleCount: 1 }),
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low", cycleCount: 1 }),
-    ];
-    const report = engine.sequence(readinessReport(items));
+    const report = engine.schedule(sequencingReport(entries));
     assert(
-      report.entries[0].sourceRecommendationKind === "PullRequired" && report.entries[1].sourceRecommendationKind === "ReviewChanges",
-      "equal level, cycleCount, and repositoryId -> sourceRecommendationKind breaks the tie alphabetically",
+      report.entries.map((e) => e.repositoryId).join(",") === "gamma,alpha,beta",
+      "entries keep the exact order Plan Sequencing produced (high, low, medium) -- Scheduling enriches in place, it never re-sorts by cadence or anything else",
     );
-  }
-
-  // score is never consulted -- two items with identical level but wildly different (non-contractual) scores still order purely by level/cycleCount/identity
-  {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 1, score: 100 }),
-      readinessItem({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 1, score: 0 }),
-    ];
-    const report = engine.sequence(readinessReport(items));
-    assert(report.entries[0].repositoryId === "alpha" && report.entries[1].repositoryId === "beta", "score is never read by the comparator -- identical level/cycleCount ties break on repositoryId regardless of how different the scores are");
   }
 
   // Carried-forward fields: level and cycleCount, never recomputed
   {
-    const items = [readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "high", cycleCount: 7 })];
-    const report = engine.sequence(readinessReport(items));
-    assert(report.entries[0].level === "high" && report.entries[0].cycleCount === 7, "level and cycleCount are carried forward from AutonomousPlanItemReadiness unchanged");
+    const report = engine.schedule(sequencingReport([sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 6 })]));
+    assert(report.entries[0].level === "medium" && report.entries[0].cycleCount === 6, "level and cycleCount are carried forward from AutonomousPlanSequencingEntry unchanged");
   }
 
-  // Summary fields carried forward / recomputed honestly
+  // Summary fields
   {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low" }),
-      readinessItem({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "high" }),
+    const entries = [
+      sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low" }),
+      sequencingEntry({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "low" }),
+      sequencingEntry({ repositoryId: "gamma", sourceRecommendationKind: "PullRequired", level: "high" }),
     ];
-    const report = engine.sequence(readinessReport(items, "diverged"));
-    assert(report.summary.currentness === "diverged", "summary.currentness carries forward the readiness report's own plan-level fact unchanged");
-    assert(report.summary.levelBreakdown.low === 1 && report.summary.levelBreakdown.high === 1, "summary.levelBreakdown mirrors the readiness report's own breakdown");
-    assert(report.summary.entriesSequenced === 2, "entriesSequenced matches the number of items sequenced");
+    const report = engine.schedule(sequencingReport(entries, "diverged"));
+    assert(report.summary.currentness === "diverged", "summary.currentness carries forward the sequencing report's own plan-level fact unchanged");
+    assert(report.summary.entriesScheduled === 3, "entriesScheduled matches the number of entries scheduled");
+    assert(report.summary.cadenceBreakdown.frequent === 2 && report.summary.cadenceBreakdown.infrequent === 1 && report.summary.cadenceBreakdown.periodic === 0, "cadenceBreakdown counts entries by their derived cadence");
   }
 
-  // No sequence/index field on entries -- array position is the order
+  // No numeric interval, minute, duration, or timer field appears anywhere in the output shape
   {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "low" }),
-      readinessItem({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "high" }),
+    const report = engine.schedule(sequencingReport([sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium" })]));
+    const forbiddenKeys = [
+      "suggestedIntervalMinutes",
+      "intervalMinutes",
+      "interval",
+      "minutes",
+      "duration",
+      "durationMs",
+      "cadenceMs",
+      "timer",
+      "nextRun",
+      "scheduledAt",
+      "dueAt",
+      "windowMs",
+      "approved",
+      "eligible",
+      "requiresReview",
+      "execute",
     ];
-    const report = engine.sequence(readinessReport(items));
-    const keys = Object.keys(report.entries[0]);
-    assert(!keys.includes("sequence") && !keys.includes("index") && !keys.includes("position"), "entries carry no redundant sequence/index/position field -- array order alone is the descriptive order");
-  }
-
-  // No timing, cadence, interval, scheduling, approval, eligibility, or execution vocabulary anywhere in the output shape
-  {
-    const items = [readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium" })];
-    const report = engine.sequence(readinessReport(items));
-    const forbiddenKeys = ["interval", "cadence", "schedule", "scheduledAt", "nextRun", "dueAt", "approved", "eligible", "requiresReview", "execute"];
     const allKeys = [...Object.keys(report), ...Object.keys(report.summary), ...Object.keys(report.entries[0])];
-    assert(!forbiddenKeys.some((forbidden) => allKeys.includes(forbidden)), "no timing/cadence/scheduling/approval/eligibility/execution field exists anywhere in the report shape");
+    assert(!forbiddenKeys.some((forbidden) => allKeys.includes(forbidden)), "no numeric interval/duration/timer/approval/eligibility/execution field exists anywhere in the report shape -- cadence is a classification only");
+    assert(typeof report.entries[0].cadence === "string", "cadence is a string classification, never a number");
   }
 
-  // Purity: calling sequence() twice with the same input produces identical output
+  // Purity: calling schedule() twice with the same input produces identical output
   {
-    const items = [
-      readinessItem({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 3 }),
-      readinessItem({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "low", cycleCount: 1 }),
-    ];
-    const input = readinessReport(items);
-    const first = engine.sequence(input);
-    const second = engine.sequence(input);
+    const input = sequencingReport([
+      sequencingEntry({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", level: "medium", cycleCount: 2 }),
+      sequencingEntry({ repositoryId: "beta", sourceRecommendationKind: "PullRequired", level: "low", cycleCount: 1 }),
+    ]);
+    const first = engine.schedule(input);
+    const second = engine.schedule(input);
     assert(
       JSON.stringify({ ...first, generatedAt: undefined }) === JSON.stringify({ ...second, generatedAt: undefined }),
-      "sequence() is a pure function -- identical input produces identical output, no internal state to drift",
+      "schedule() is a pure function -- identical input produces identical output, no internal state to drift",
     );
   }
 }
@@ -208,7 +178,7 @@ class FakeDecisionEngine implements IDecisionEngine {
 }
 class FakeRecommendationEngine implements IRecommendationEngine {
   recommend(snapshotArg: RepositorySnapshot): RepositoryRecommendationReport {
-    const recommendation: Recommendation = { kind: "PullRequired", category: "blocking", priority: "high", reason: "test", supportingEvidence: [] };
+    const recommendation: Recommendation = { kind: "PullRequired", category: "informational", priority: "low", reason: "test", supportingEvidence: [] };
     return { repositoryId: snapshotArg.repository.id, generatedAt: new Date(), recommendations: [recommendation] };
   }
 }
@@ -315,11 +285,11 @@ class RecordingAutonomousPlanHistoryService implements IAutonomousPlanHistorySer
 
 function item(overrides: Partial<AutonomousPlanItem> & Pick<AutonomousPlanItem, "repositoryId" | "sourceRecommendationKind">): AutonomousPlanItem {
   return {
-    category: "advisory",
-    priority: "medium",
+    category: "informational",
+    priority: "low",
     reason: "test",
     supportingEvidence: [],
-    confidence: "medium",
+    confidence: "low",
     ...overrides,
   };
 }
@@ -333,9 +303,13 @@ function historyEntry(cycleNumber: number, p: AutonomousPlan, evolution: ReturnT
 }
 
 async function verifyApplicationServiceIntegration(): Promise<void> {
+  // Recorded history whose sole cycle exactly matches the live plan
+  // (informational category -> low confidence, per AutonomousPlanningEngine's
+  // confidenceFor()) so the live plan compares as "current" and its readiness
+  // level lands on "low" -> cadence "frequent".
   const evolutionEngine = new AutonomousPlanEvolutionEngine();
   const recordedPlan = plan("recorded-1", [
-    item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", category: "blocking", priority: "high", confidence: "high" }),
+    item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired", category: "informational", priority: "low", confidence: "low" }),
   ]);
   const recordedEntry = historyEntry(1, recordedPlan, evolutionEngine.analyze(undefined, recordedPlan, 1));
   const historyService = new RecordingAutonomousPlanHistoryService([recordedEntry]);
@@ -367,26 +341,27 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     schedulingEngine,
   );
 
-  const sequenceReport = await applicationService.getAutonomousPlanSequence();
+  const scheduleReport = await applicationService.getAutonomousPlanSchedule();
 
-  assert(sequenceReport.entries.length === 1, "getAutonomousPlanSequence() sequences exactly the one item the live plan produced");
-  assert(sequenceReport.entries[0].repositoryId === "alpha" && sequenceReport.entries[0].sourceRecommendationKind === "PullRequired", "the sequenced entry's identity matches the live plan's own item");
-  assert(sequenceReport.entries[0].level === "high", "level is carried forward from the readiness assessment (blocking category -> high confidence -> no observed indicators -> high level)");
-  assert(sequenceReport.summary.currentness === "current", "summary.currentness carries forward the readiness report's own currentness fact");
+  assert(scheduleReport.entries.length === 1, "getAutonomousPlanSchedule() schedules exactly the one item the live plan produced");
+  assert(scheduleReport.entries[0].repositoryId === "alpha" && scheduleReport.entries[0].sourceRecommendationKind === "PullRequired", "the scheduled entry's identity matches the live plan's own item");
+  assert(scheduleReport.entries[0].level === "low", "level is carried forward from the readiness assessment (informational category -> low confidence -> low level)");
+  assert(scheduleReport.entries[0].cadence === "frequent", "low readiness level -> cadence frequent");
+  assert(scheduleReport.summary.currentness === "current", "summary.currentness carries forward the sequencing report's own currentness fact");
 
-  assert(historyService.recordCalls === 0, "getAutonomousPlanSequence() never calls IAutonomousPlanHistoryService.record(), anywhere in the chain");
+  assert(historyService.recordCalls === 0, "getAutonomousPlanSchedule() never calls IAutonomousPlanHistoryService.record(), anywhere in the chain");
 
-  // Cross-check: sequencing the same readiness report fetched independently
-  // produces the same result -- proving getAutonomousPlanSequence() is
-  // honestly composing readiness data, not something else.
-  const independentReadiness = await applicationService.getAutonomousPlanReadiness();
-  const independentSequence = sequencingEngine.sequence(independentReadiness);
+  // Cross-check: scheduling the same sequence report fetched independently
+  // produces the same result -- proving getAutonomousPlanSchedule() is
+  // honestly composing Plan Sequencing data, not something else.
+  const independentSequence = await applicationService.getAutonomousPlanSequence();
+  const independentSchedule = schedulingEngine.schedule(independentSequence);
   assert(
-    JSON.stringify({ ...sequenceReport, generatedAt: undefined }) === JSON.stringify({ ...independentSequence, generatedAt: undefined }),
-    "getAutonomousPlanSequence()'s result matches independently sequencing the same readiness report",
+    JSON.stringify({ ...scheduleReport, generatedAt: undefined }) === JSON.stringify({ ...independentSchedule, generatedAt: undefined }),
+    "getAutonomousPlanSchedule()'s result matches independently scheduling the same sequence report",
   );
 
-  // Empty registry -> empty sequence
+  // Empty registry -> empty schedule
   {
     const emptyHistoryService = new RecordingAutonomousPlanHistoryService([]);
     const emptyPlanningService = new AutonomousPlanningService(emptyHistoryService, stateEngine, analysisEngine);
@@ -409,14 +384,14 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
       sequencingEngine,
       schedulingEngine,
     );
-    const emptySequence = await emptyApplicationService.getAutonomousPlanSequence();
-    assert(emptySequence.entries.length === 0, "no registered repositories -> an empty live plan -> an empty sequence");
-    assert(emptyHistoryService.recordCalls === 0, "getAutonomousPlanSequence() never calls record(), even against an empty history");
+    const emptySchedule = await emptyApplicationService.getAutonomousPlanSchedule();
+    assert(emptySchedule.entries.length === 0, "no registered repositories -> an empty live plan -> an empty schedule");
+    assert(emptyHistoryService.recordCalls === 0, "getAutonomousPlanSchedule() never calls record(), even against an empty history");
   }
 }
 
 async function main(): Promise<void> {
-  verifyAutonomousPlanSequencingEngine();
+  verifyAutonomousPlanSchedulingEngine();
   await verifyApplicationServiceIntegration();
 }
 
