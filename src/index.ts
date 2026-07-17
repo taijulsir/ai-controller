@@ -23,6 +23,7 @@ import { AutonomousPlanningService } from "./plan";
 import { AutonomousPlanReadinessEngine } from "./planreadiness";
 import { AutonomousPlanRecordingService } from "./planrecording";
 import { AutonomousExecutionOrchestrator } from "./autonomousexecution";
+import type { IAutonomousExecutionOrchestrator } from "./autonomousexecution";
 import { AutonomousPlanSequencingEngine } from "./plansequencing";
 import { AutonomousPlanStateEngine } from "./planstate";
 import { AutonomousPlanSchedulingEngine } from "./scheduling";
@@ -38,6 +39,8 @@ import { ClaudeSessionManager } from "./session";
 import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
 import {
+  NotifyingAutonomousExecutionOrchestrator,
+  ResponseFormatter,
   TelegramAdapter,
   TelegramApiClient,
   TelegramApprovalProvider,
@@ -266,38 +269,56 @@ async function bootstrap(): Promise<void> {
 
   const plainControllerCore = new ControllerCore(repositoryRegistry, taskPlanner, workflowOrchestrator);
 
-  // Phase 11 (extended in Phase 12/13): the first, and now the third,
+  // Phase 14: fetched here — earlier than telegramConfig was previously
+  // read in this file (it used to be read only inside the telegram.enabled
+  // check below, which is reused as-is further down rather than re-fetched
+  // a second time) — because AutonomousExecutionWorker (in the Background
+  // Runtime cluster below) needs operatorCorrelationId before it is
+  // constructed. Reading config is a pure, side-effect-free operation
+  // regardless of whether Telegram ends up enabled, so this is safe to do
+  // unconditionally, this early. operator_chat_id is optional: absent ->
+  // operatorCorrelationId is undefined -> AutonomousExecutionWorker behaves
+  // exactly as it did in Phase 13.
+  //
+  // Phase 15: telegramClient and telegramSecurity are, for the same reason,
+  // now also constructed here rather than only inside the telegram.enabled
+  // branch (where they used to be built and are reused, not rebuilt, below)
+  // — NotifyingAutonomousExecutionOrchestrator needs a real ITelegramClient
+  // before AutonomousExecutionWorker is constructed. Both classes' own
+  // constructors are trivial, side-effect-free wrappers around configService
+  // (no network call, no env var read, no eager validation) — confirmed
+  // safe to construct unconditionally, the same way telegramConfig itself
+  // already is.
+  const telegramConfig = configService.getTelegramConfig();
+  const operatorChatId = telegramConfig.telegram.operator_chat_id;
+  const operatorCorrelationId = operatorChatId !== undefined ? buildTelegramCorrelationId(operatorChatId, 0) : undefined;
+  const telegramClient = new TelegramApiClient(configService);
+  const telegramSecurity = new TelegramSecurity(configService);
+  const responseFormatter = new ResponseFormatter();
+
+  // Phase 11 (extended in Phase 12/13/15): the first, and now the third,
   // execution-capable component's shared entry point. Reuses this exact
   // applicationService and executionPipeline instance — no new resource, no
   // new ordering constraint. Constructed once, here, and reused by both
   // TelegramAdapter (inside the telegram.enabled branch below) and
   // AutonomousExecutionWorker (in the Background Runtime cluster
   // immediately below) rather than each building its own instance.
-  const autonomousExecutionOrchestrator = new AutonomousExecutionOrchestrator(applicationService, executionPipeline);
-
-  // Phase 14: fetched here — earlier than telegramConfig was previously
-  // read in this file (it used to be read only inside the telegram.enabled
-  // check below, which is reused as-is further down rather than re-fetched
-  // a second time) — because AutonomousExecutionWorker (in the Background
-  // Runtime cluster immediately below) needs operatorCorrelationId before
-  // it is constructed. Reading config is a pure, side-effect-free operation
-  // regardless of whether Telegram ends up enabled, so this is safe to do
-  // unconditionally, this early. operator_chat_id is optional: absent ->
-  // operatorCorrelationId is undefined -> AutonomousExecutionWorker behaves
-  // exactly as it did in Phase 13. Present -> buildTelegramCorrelationId()
-  // (the exact same, unmodified function TelegramAdapter already uses for
-  // real updates) builds one fixed, opaque string, computed once, never
-  // recomputed per tick — safe because AutonomousExecutionWorker's own
-  // re-entrancy guard already ensures at most one attemptExecution() call
-  // is ever in flight from this worker at a time, so reusing the same
-  // correlationId across ticks can never collide with itself. No new
-  // interface or class was introduced for this — operatorCorrelationId is a
-  // plain string, the same shape PipelineRequest.correlationId already is.
-  const telegramConfig = configService.getTelegramConfig();
-  const operatorCorrelationId =
-    telegramConfig.telegram.operator_chat_id !== undefined
-      ? buildTelegramCorrelationId(telegramConfig.telegram.operator_chat_id, 0)
-      : undefined;
+  //
+  // Phase 15: when operatorChatId is configured, this is instead the
+  // NotifyingAutonomousExecutionOrchestrator decorator — same interface,
+  // same downstream usage by both consumers, the wrapped
+  // AutonomousExecutionOrchestrator itself completely unchanged either way.
+  // The decision is made exactly once, here; nothing downstream needs to
+  // know which concrete implementation it received.
+  const autonomousExecutionOrchestrator: IAutonomousExecutionOrchestrator =
+    operatorChatId !== undefined
+      ? new NotifyingAutonomousExecutionOrchestrator(
+          new AutonomousExecutionOrchestrator(applicationService, executionPipeline),
+          telegramClient,
+          responseFormatter,
+          operatorChatId,
+        )
+      : new AutonomousExecutionOrchestrator(applicationService, executionPipeline);
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
   // policy in Phase 8.4; a second worker added in Phase 10.1, a third in
@@ -446,8 +467,9 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
-  const telegramClient = new TelegramApiClient(configService);
-  const telegramSecurity = new TelegramSecurity(configService);
+  // telegramClient and telegramSecurity were already constructed above
+  // (Phase 15), before the Background Runtime cluster -- reused here rather
+  // than built a second time.
   // Registers this exact same attentionDispatcher (built above, before this
   // branch was known to be reached) with its one Telegram-specific transport
   // — the only place in this file where the attention-delivery cluster and
@@ -469,17 +491,23 @@ async function bootstrap(): Promise<void> {
   // against controllerEntryPoint, so it transparently reaches this same
   // fully-decorated controllerCore (approval-gated, memory-recording) now
   // that binding has happened, identical to how WorkflowOrchestrator does.
-  // Phase 12 (rewired in Phase 13): reuses the exact same
-  // autonomousExecutionOrchestrator instance built earlier in this function
-  // (Phase 13 moved its construction above the Background Runtime cluster,
-  // since AutonomousExecutionWorker now also needs it) — TelegramAdapter and
-  // AutonomousExecutionWorker share one orchestrator instance, not two.
+  // Phase 12 (rewired in Phase 13, extended in Phase 15): reuses the exact
+  // same autonomousExecutionOrchestrator instance built earlier in this
+  // function (Phase 13 moved its construction above the Background Runtime
+  // cluster, since AutonomousExecutionWorker now also needs it) —
+  // TelegramAdapter and AutonomousExecutionWorker share one orchestrator
+  // instance, not two, whether or not it is the Phase 15 notifying variant.
+  // responseFormatter is likewise the same shared instance built above
+  // (also used by NotifyingAutonomousExecutionOrchestrator, if constructed)
+  // rather than each collaborator building its own.
   const telegramAdapter = new TelegramAdapter(
     executionPipeline,
     applicationService,
     telegramSecurity,
     telegramClient,
     autonomousExecutionOrchestrator,
+    undefined,
+    responseFormatter,
   );
   poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramApprovalProvider);
 
