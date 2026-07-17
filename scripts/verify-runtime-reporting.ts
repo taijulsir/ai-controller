@@ -2,8 +2,10 @@ import type { IApplicationService } from "../src/application/interfaces";
 import { ApplicationService } from "../src/application/ApplicationService";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlanEvolutionEngine";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
+import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeControlService } from "../src/control/interfaces";
@@ -400,6 +402,7 @@ async function main(): Promise<void> {
       new UnusedRuntimeAdministrationService(),
       new AutonomousPlanningEngine(),
       new UnusedAutonomousPlanHistoryService(),
+      new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
     );
 
     applicationService.getRuntimeReport();

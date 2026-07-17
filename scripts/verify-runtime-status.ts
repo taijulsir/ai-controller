@@ -4,8 +4,10 @@ import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces"
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
 import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlanEvolutionEngine";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
+import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import { AttentionDispatcher } from "../src/attention/AttentionDispatcher";
@@ -425,6 +427,7 @@ async function main(): Promise<void> {
       new UnusedRuntimeAdministrationService(),
       new AutonomousPlanningEngine(),
       new UnusedAutonomousPlanHistoryService(),
+      new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
     );
 
     let threw = false;

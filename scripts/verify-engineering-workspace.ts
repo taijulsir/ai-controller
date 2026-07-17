@@ -2,8 +2,10 @@ import { ApplicationService } from "../src/application/ApplicationService";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
+import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlanEvolutionEngine";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
+import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import { RuntimeDiagnosticsEngine } from "../src/diagnostics/RuntimeDiagnosticsEngine";
 import { RuntimeReportingEngine } from "../src/reporting/RuntimeReportingEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
@@ -213,6 +215,7 @@ function buildService(monitor?: FakeProactiveMonitor) {
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
     new UnusedAutonomousPlanHistoryService(),
+    new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
     monitor,
   );
   return { service, repositoryIntelligence, projectMemory, decisionEngine, recommendationEngine, engineeringAssistanceEngine };

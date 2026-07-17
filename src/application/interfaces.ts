@@ -7,6 +7,7 @@ import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
+import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { ClaudeSessionInfo } from "../session/types";
@@ -33,6 +34,16 @@ export interface IApplicationService {
   getAutonomousPlanHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]>;
   // undefined only when no cycle has ever been recorded yet.
   getLatestAutonomousPlanEvolution(): Promise<AutonomousPlanEvolutionReport | undefined>;
+  // Phase 9.3: the full active/superseded picture over recent history —
+  // purely derived, records nothing.
+  getAutonomousPlanStates(limit?: number): Promise<AutonomousPlanState[]>;
+  // Phase 9.3: the current authoritative plan's state; undefined only when
+  // no cycle has ever been recorded.
+  getCurrentPlanState(): Promise<AutonomousPlanState | undefined>;
+  // Phase 9.3: compares the live, not-yet-recorded plan against the
+  // currently active recorded one. Never records anything — a pure "what
+  // if" query.
+  getLivePlanComparison(): Promise<LivePlanComparison>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

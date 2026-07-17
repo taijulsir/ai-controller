@@ -23,6 +23,7 @@ import type { RepositorySnapshot } from "../src/intelligence/types";
 import type { IProjectMemoryService } from "../src/memory/interfaces";
 import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { IRecommendationEngine } from "../src/recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../src/recommendations/types";
 import type { IRepositoryRegistry } from "../src/repositories/interfaces";
@@ -386,6 +387,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
     fakeHistoryService,
+    new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
   );
 
   const history = await applicationService.getAutonomousPlanHistory();
@@ -414,6 +416,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
     emptyHistoryService,
+    new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
   );
   const noEvolution = await applicationService2.getLatestAutonomousPlanEvolution();
   assert(noEvolution === undefined, "no cycle ever recorded -> getLatestAutonomousPlanEvolution() is undefined, not a fabricated report");

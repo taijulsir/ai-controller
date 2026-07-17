@@ -18,6 +18,7 @@ import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor } from "./monitoring";
 import { TaskPlanner, WorkflowFactory } from "./planner";
 import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./planhistory";
+import { AutonomousPlanStateEngine } from "./planstate";
 import { ExecutionPipeline } from "./pipeline";
 import { PlanningEngine } from "./planning";
 import { WorkflowOrchestrator, WorkflowRegistry } from "./orchestration";
@@ -114,6 +115,14 @@ async function bootstrap(): Promise<void> {
   // runtime/scheduler phase, not to bootstrap.
   const autonomousPlanEvolutionEngine = new AutonomousPlanEvolutionEngine();
   const autonomousPlanHistoryService = new AutonomousPlanHistoryService(configService, autonomousPlanEvolutionEngine);
+  // Phase 9.3: AutonomousPlanStateEngine derives plan state purely from
+  // AutonomousPlanHistoryEntry data ApplicationService already fetches — it
+  // holds no state of its own (deriveStates() recomputes fresh from
+  // whatever window it's given every call) and reuses
+  // autonomousPlanEvolutionEngine (already built above) for its
+  // compareToActive() hypothetical-comparison method, rather than
+  // constructing a second instance. No ordering constraint, no seam needed.
+  const autonomousPlanStateEngine = new AutonomousPlanStateEngine(autonomousPlanEvolutionEngine);
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist
@@ -143,6 +152,7 @@ async function bootstrap(): Promise<void> {
     deferredRuntimeAdministrationService,
     autonomousPlanningEngine,
     autonomousPlanHistoryService,
+    autonomousPlanStateEngine,
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
