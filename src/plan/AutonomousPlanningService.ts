@@ -1,4 +1,6 @@
 import type { AutonomousPlan } from "../autonomy/types";
+import type { IAutonomousPlanningAnalysisEngine } from "../plananalysis/interfaces";
+import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { IAutonomousPlanHistoryService } from "../planhistory/interfaces";
 import type { IAutonomousPlanStateEngine } from "../planstate/interfaces";
 import type { AutonomousPlanState } from "../planstate/types";
@@ -28,10 +30,18 @@ import type { AutonomousPlanCycleSummary, AutonomousPlanningSnapshot } from "./t
 // though that interface exposes it — recording, and when a planning cycle
 // should be recorded, remain outside this class entirely, same as they are
 // for ApplicationService itself.
+//
+// Phase 9.5: owns the orchestration of the "analyze recent cycles" use case
+// (fetch the window once via getRecentCycles(), hand it to the pure
+// IAutonomousPlanningAnalysisEngine) so that use case's orchestration lives
+// here, alongside the domain's other use cases, rather than in
+// ApplicationService — which stays pure delegation for this method exactly
+// as it already is for the other three.
 export class AutonomousPlanningService implements IAutonomousPlanningService {
   constructor(
     private readonly historyService: IAutonomousPlanHistoryService,
     private readonly stateEngine: IAutonomousPlanStateEngine,
+    private readonly analysisEngine: IAutonomousPlanningAnalysisEngine,
   ) {}
 
   async getCurrentPlanState(): Promise<AutonomousPlanState | undefined> {
@@ -57,5 +67,15 @@ export class AutonomousPlanningService implements IAutonomousPlanningService {
     const comparison = this.stateEngine.compareToActive(livePlan, activeEntry);
 
     return { generatedAt: new Date(), plan: livePlan, currentState, comparison };
+  }
+
+  // Reuses getRecentCycles() (already fetch-once) rather than calling
+  // historyService/stateEngine a second, independent way -- the window
+  // handed to the analysis engine is exactly the same data
+  // getAutonomousPlanHistory()/getAutonomousPlanStates() would return for
+  // the same limit.
+  async getAnalysis(limit?: number): Promise<AutonomousPlanAnalysisReport> {
+    const cycles = await this.getRecentCycles(limit);
+    return this.analysisEngine.analyze(cycles);
   }
 }

@@ -14,6 +14,7 @@ import type { IProjectMemoryService } from "../memory/interfaces";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { IProactiveMonitor } from "../monitoring/interfaces";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
+import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { IAutonomousPlanningService } from "../plan/interfaces";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
@@ -280,6 +281,15 @@ export class ApplicationService implements IApplicationService {
   async getAutonomousPlanningSnapshot(): Promise<AutonomousPlanningSnapshot> {
     const livePlan = await this.getAutonomousPlan();
     return this.autonomousPlanningService.getPlanningStatus(livePlan);
+  }
+
+  // Phase 9.5: pure delegation, no orchestration — AutonomousPlanningService
+  // owns fetching the recent-cycles window and invoking the analysis engine
+  // itself (see its getAnalysis() doc comment); this class does not regain
+  // planning-specific orchestration responsibility for this method any more
+  // than it holds one for the other four Autonomous Planning queries above.
+  async getAutonomousPlanAnalysis(limit?: number): Promise<AutonomousPlanAnalysisReport> {
+    return this.autonomousPlanningService.getAnalysis(limit);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {

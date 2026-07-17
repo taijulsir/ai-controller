@@ -1,12 +1,14 @@
 import type { AutonomousPlan } from "../autonomy/types";
+import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { AutonomousPlanState } from "../planstate/types";
 import type { AutonomousPlanCycleSummary, AutonomousPlanningSnapshot } from "./types";
 
-// Three consumer-oriented use cases over the recorded-planning domain
-// (Phases 9.2/9.3), not a one-for-one mirror of IAutonomousPlanHistoryService/
-// IAutonomousPlanStateEngine's own methods. Deliberately excludes live plan
-// synthesis (Phase 9.1's getAutonomousPlan()) — see AutonomousPlanningService's
-// own doc comment for why that boundary is held.
+// Consumer-oriented use cases over the recorded-planning domain (Phases
+// 9.2/9.3/9.5), not a one-for-one mirror of IAutonomousPlanHistoryService/
+// IAutonomousPlanStateEngine/IAutonomousPlanningAnalysisEngine's own
+// methods. Deliberately excludes live plan synthesis (Phase 9.1's
+// getAutonomousPlan()) — see AutonomousPlanningService's own doc comment
+// for why that boundary is held.
 export interface IAutonomousPlanningService {
   // "What's authoritative right now" — lightweight, a single-entry fetch,
   // no live plan required.
@@ -19,4 +21,10 @@ export interface IAutonomousPlanningService {
   // the caller (see the interface-level doc comment above), one active-entry
   // fetch reused for both currentState and comparison.
   getPlanningStatus(livePlan: AutonomousPlan): Promise<AutonomousPlanningSnapshot>;
+  // "What multi-cycle patterns (chronic, sustained escalation, flapping)
+  // show up across recent history" — reuses getRecentCycles() internally
+  // (one fetch) and hands the window to the pure analysis engine. This
+  // class owns fetching the window; ApplicationService only ever delegates
+  // to this method, never re-derives the window itself.
+  getAnalysis(limit?: number): Promise<AutonomousPlanAnalysisReport>;
 }

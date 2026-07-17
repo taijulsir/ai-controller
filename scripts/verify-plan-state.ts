@@ -1,8 +1,10 @@
 import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlanEvolutionEngine";
+import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { AutonomousPlan, AutonomousPlanItem } from "../src/autonomy/types";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
+import type { AutonomousPlanCycleSummary } from "../src/plan/types";
 import { ApplicationService } from "../src/application/ApplicationService";
 import type { IApplicationService } from "../src/application/interfaces";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
@@ -63,6 +65,20 @@ function chain(evolutionEngine: AutonomousPlanEvolutionEngine, plans: Autonomous
     cycleNumber += 1;
   }
   return entries.reverse(); // newest-first, matching AutonomousPlanHistoryService.getHistory()'s contract
+}
+
+// Builds an AutonomousPlanCycleSummary[] window directly -- what
+// AutonomousPlanningService.getRecentCycles() would return for the given
+// plan sequence -- so the analysis engine can be tested standalone without
+// going through the façade or any IAutonomousPlanHistoryService fixture.
+function cycleSummaries(
+  evolutionEngine: AutonomousPlanEvolutionEngine,
+  stateEngine: AutonomousPlanStateEngine,
+  plans: AutonomousPlan[],
+): AutonomousPlanCycleSummary[] {
+  const history = chain(evolutionEngine, plans);
+  const states = stateEngine.deriveStates(history);
+  return history.map((historyEntry, index) => ({ entry: historyEntry, state: states[index] }));
 }
 
 function verifyDeriveStates(): void {
@@ -324,7 +340,7 @@ async function verifyAutonomousPlanningService(): Promise<void> {
   // getRecentCycles(): one history fetch, entry + derived state paired for every cycle
   {
     const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
-    const service = new AutonomousPlanningService(historyService, stateEngine);
+    const service = new AutonomousPlanningService(historyService, stateEngine, new AutonomousPlanningAnalysisEngine());
 
     const cycles = await service.getRecentCycles();
     assert(cycles.length === 2, "getRecentCycles() returns one summary per recorded cycle in the fetched window");
@@ -341,7 +357,7 @@ async function verifyAutonomousPlanningService(): Promise<void> {
   // getCurrentPlanState(): a single-entry fetch, not the full window
   {
     const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
-    const service = new AutonomousPlanningService(historyService, stateEngine);
+    const service = new AutonomousPlanningService(historyService, stateEngine, new AutonomousPlanningAnalysisEngine());
 
     const current = await service.getCurrentPlanState();
     assert(current?.planId === "p2" && current?.status === "active", "getCurrentPlanState() returns the current authoritative plan's state");
@@ -349,7 +365,7 @@ async function verifyAutonomousPlanningService(): Promise<void> {
     assert(historyService.getHistoryCalls === 0, "getCurrentPlanState() never fetches the full history window just to answer 'what's current'");
     assert(historyService.recordCalls === 0, "getCurrentPlanState() never calls record()");
 
-    const emptyService = new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine);
+    const emptyService = new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine, new AutonomousPlanningAnalysisEngine());
     const noCurrent = await emptyService.getCurrentPlanState();
     assert(noCurrent === undefined, "no cycle ever recorded -> getCurrentPlanState() is undefined, not a fabricated state");
   }
@@ -357,7 +373,7 @@ async function verifyAutonomousPlanningService(): Promise<void> {
   // getPlanningStatus(livePlan): one active-entry fetch, reused for both currentState and comparison
   {
     const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
-    const service = new AutonomousPlanningService(historyService, stateEngine);
+    const service = new AutonomousPlanningService(historyService, stateEngine, new AutonomousPlanningAnalysisEngine());
     const livePlan = plan("live", []); // diverges from p2's non-empty item set
 
     const snapshot = await service.getPlanningStatus(livePlan);
@@ -367,10 +383,35 @@ async function verifyAutonomousPlanningService(): Promise<void> {
     assert(historyService.getLatestEntryCalls === 1, "getPlanningStatus() fetches the active entry exactly once, reused for both currentState and the comparison -- never two independent reads that could disagree");
     assert(historyService.recordCalls === 0, "getPlanningStatus() never calls record() -- it is a pure 'what if' query");
 
-    const emptyService = new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine);
+    const emptyService = new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine, new AutonomousPlanningAnalysisEngine());
     const noActiveSnapshot = await emptyService.getPlanningStatus(livePlan);
     assert(noActiveSnapshot.currentState === undefined, "no cycle ever recorded -> getPlanningStatus().currentState is undefined");
     assert(noActiveSnapshot.comparison.hasActivePlan === false, "no cycle ever recorded -> getPlanningStatus().comparison.hasActivePlan is false");
+  }
+
+  // getAnalysis(limit): AutonomousPlanningService owns fetching the window
+  // (via its own getRecentCycles()) and invoking the pure analysis engine --
+  // this is the orchestration Phase 9.5's refinement specifically asked to
+  // keep out of ApplicationService.
+  {
+    const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
+    const analysisEngine = new AutonomousPlanningAnalysisEngine();
+    const service = new AutonomousPlanningService(historyService, stateEngine, analysisEngine);
+
+    const report = await service.getAnalysis();
+    const expected = analysisEngine.analyze(await service.getRecentCycles());
+    assert(JSON.stringify({ ...report, generatedAt: undefined }) === JSON.stringify({ ...expected, generatedAt: undefined }), "getAnalysis() produces exactly what analyzing the same getRecentCycles() window directly would produce");
+    // Three getHistory() calls total: one inside getAnalysis()'s own
+    // getRecentCycles() call, one inside the direct getRecentCycles() call
+    // above used only to compute `expected` for this assertion, and zero
+    // more -- getAnalysis() itself performs exactly one.
+    assert(historyService.getLatestEntryCalls === 0, "getAnalysis() never touches getLatestEntry()");
+    assert(historyService.recordCalls === 0, "getAnalysis() never calls record()");
+
+    const singleFetchHistoryService = new RecordingAutonomousPlanHistoryService(history[0], history);
+    const singleFetchService = new AutonomousPlanningService(singleFetchHistoryService, stateEngine, analysisEngine);
+    await singleFetchService.getAnalysis(1);
+    assert(singleFetchHistoryService.getHistoryCalls === 1, "getAnalysis(limit) fetches history exactly once per call, reusing getRecentCycles()'s own fetch-once discipline");
   }
 }
 
@@ -382,7 +423,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
   const plan2 = plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]);
   const history = chain(evolutionEngine, [plan1, plan2]); // newest-first: p2, p1
   const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
-  const autonomousPlanningService = new AutonomousPlanningService(historyService, stateEngine);
+  const autonomousPlanningService = new AutonomousPlanningService(historyService, stateEngine, new AutonomousPlanningAnalysisEngine());
 
   function buildService(repositories: Repository[]): IApplicationService {
     return new ApplicationService(
@@ -427,7 +468,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     new UnusedRuntimeControlService(),
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
-    new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine),
+    new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine, new AutonomousPlanningAnalysisEngine()),
   );
   const noCurrent = await noHistoryService.getCurrentPlanState();
   assert(noCurrent === undefined, "no cycle ever recorded -> getCurrentPlanState() is undefined, not a fabricated state");
@@ -445,12 +486,152 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
   assert(snapshot.currentState?.planId === "p2", "getAutonomousPlanningSnapshot() carries the current authoritative plan's state");
   assert(snapshot.comparison.matchesActivePlan === false, "getAutonomousPlanningSnapshot()'s comparison matches getLivePlanComparison()'s own result for the same live/active pair");
 
-  assert(historyService.recordCalls === 0, "none of getAutonomousPlanStates()/getCurrentPlanState()/getLivePlanComparison()/getAutonomousPlanningSnapshot() ever call IAutonomousPlanHistoryService.record()");
+  // getAutonomousPlanAnalysis() is pure delegation to
+  // AutonomousPlanningService.getAnalysis() -- ApplicationService performs
+  // no orchestration of its own for this method, exactly like every other
+  // Autonomous Planning query it exposes.
+  const analysis = await applicationService.getAutonomousPlanAnalysis();
+  assert(analysis.summary.cyclesAnalyzed === 2, "getAutonomousPlanAnalysis() reflects the same two-cycle window every other query in this test sees");
+
+  assert(historyService.recordCalls === 0, "none of getAutonomousPlanStates()/getCurrentPlanState()/getLivePlanComparison()/getAutonomousPlanningSnapshot()/getAutonomousPlanAnalysis() ever call IAutonomousPlanHistoryService.record()");
+}
+
+function verifyAutonomousPlanningAnalysisEngine(): void {
+  const engine = new AutonomousPlanningAnalysisEngine();
+  const evolutionEngine = new AutonomousPlanEvolutionEngine();
+  const stateEngine = new AutonomousPlanStateEngine(evolutionEngine);
+
+  // No cycles -> empty report, not a fabricated fallback
+  {
+    const report = engine.analyze([]);
+    assert(report.items.length === 0, "no cycles -> empty items");
+    assert(report.summary.cyclesAnalyzed === 0, "no cycles -> cyclesAnalyzed is 0");
+    assert(report.summary.chronicCount === 0 && report.summary.sustainedEscalationCount === 0 && report.summary.flappingCount === 0, "no cycles -> every summary count is 0");
+  }
+
+  // No pattern at all -> the item is absent from the report entirely
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]),
+    ]);
+    const report = engine.analyze(cycles);
+    assert(report.items.length === 0, "a single, unremarkable appearance -> no pattern, item omitted rather than included with an empty patterns array");
+  }
+
+  // Chronic: present, not resolved, cycleCount at or above the threshold (5)
+  {
+    const plans = Array.from({ length: 5 }, () => plan("p", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]));
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, plans);
+    const report = engine.analyze(cycles);
+    assert(report.items.length === 1, "5 consecutive cycles of the same concern -> exactly one analyzed item");
+    const analysis = report.items[0];
+    assert(analysis.patterns.includes("chronic"), "cycleCount 5 with the item still present -> chronic");
+    assert(analysis.cycleCount === 5, "cycleCount on the analysis matches the newest transition's own cycleCount");
+    assert(report.summary.chronicCount === 1, "summary.chronicCount reflects the one chronic item");
+  }
+
+  // Not chronic once resolved, even after a long prior streak
+  {
+    const plans = [
+      ...Array.from({ length: 5 }, () => plan("p", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })])),
+      plan("p6", []), // resolved in the 6th cycle
+    ];
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, plans);
+    const report = engine.analyze(cycles);
+    assert(report.items.length === 0, "resolved in the newest cycle -> not chronic, and not flagged with any other pattern either (only one 'new' occurrence in the window)");
+  }
+
+  // Sustained escalation: >=2 consecutive escalating cycles
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "medium", category: "advisory" })]),
+      plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "high", category: "advisory" })]),
+      plan("p3", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "critical", category: "blocking" })]),
+    ]);
+    const report = engine.analyze(cycles);
+    const analysis = report.items.find((i) => i.sourceRecommendationKind === "ReviewChanges")!;
+    assert(analysis.patterns.includes("sustained-escalation"), "two consecutive escalating cycles -> sustained-escalation");
+    assert(analysis.consecutiveEscalations === 2, "consecutiveEscalations counts exactly the two escalating cycles at the head of the window");
+    assert(report.summary.sustainedEscalationCount === 1, "summary.sustainedEscalationCount reflects the one item");
+  }
+
+  // A single escalation is not sustained
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "medium", category: "advisory" })]),
+      plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "high", category: "advisory" })]),
+    ]);
+    const report = engine.analyze(cycles);
+    assert(!report.items.some((i) => i.patterns.includes("sustained-escalation")), "a single escalating cycle alone -> not sustained-escalation");
+  }
+
+  // Flapping: new, resolved, new again within the window
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]),
+      plan("p2", []),
+      plan("p3", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]),
+    ]);
+    const report = engine.analyze(cycles);
+    const analysis = report.items.find((i) => i.sourceRecommendationKind === "PullRequired")!;
+    assert(analysis.patterns.includes("flapping"), "resolved then reappeared within the window -> flapping");
+    assert(analysis.flapCount === 1, "flapCount counts exactly the one reappearance");
+    assert(!analysis.patterns.includes("chronic"), "a freshly reappeared item has cycleCount 1 -> not also chronic");
+    assert(report.summary.flappingCount === 1, "summary.flappingCount reflects the one flapping item");
+  }
+
+  // Chronic and sustained-escalation can co-occur on the same item
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "medium", category: "advisory" })]),
+      plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "medium", category: "advisory" })]),
+      plan("p3", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "medium", category: "advisory" })]),
+      plan("p4", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "high", category: "advisory" })]),
+      plan("p5", [item({ repositoryId: "alpha", sourceRecommendationKind: "ReviewChanges", priority: "critical", category: "blocking" })]),
+    ]);
+    const report = engine.analyze(cycles);
+    const analysis = report.items[0];
+    assert(analysis.patterns.includes("chronic") && analysis.patterns.includes("sustained-escalation"), "an item can carry both chronic and sustained-escalation at once");
+    assert(report.summary.chronicCount === 1 && report.summary.sustainedEscalationCount === 1, "summary counts both patterns for the same underlying item");
+  }
+
+  // Different repositories with the same recommendation kind are tracked independently
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [
+        item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" }),
+        item({ repositoryId: "beta", sourceRecommendationKind: "PullRequired" }),
+      ]),
+      plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]), // beta's item disappeared
+      plan("p3", [
+        item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" }),
+        item({ repositoryId: "beta", sourceRecommendationKind: "PullRequired" }),
+      ]), // beta's reappeared
+    ]);
+    const report = engine.analyze(cycles);
+    const alpha = report.items.find((i) => i.repositoryId === "alpha");
+    const beta = report.items.find((i) => i.repositoryId === "beta");
+    assert(alpha === undefined, "alpha's uninterrupted, unremarkable streak triggers no pattern");
+    assert(beta?.patterns.includes("flapping") === true, "beta's resolve-then-reappear is independently detected as flapping");
+  }
+
+  // Purity: calling analyze() twice with the same input produces identical output
+  {
+    const cycles = cycleSummaries(evolutionEngine, stateEngine, [
+      plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]),
+      plan("p2", []),
+      plan("p3", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]),
+    ]);
+    const first = engine.analyze(cycles);
+    const second = engine.analyze(cycles);
+    assert(JSON.stringify({ ...first, generatedAt: undefined }) === JSON.stringify({ ...second, generatedAt: undefined }), "analyze() is a pure function -- identical input produces identical summary/items, no internal state to drift");
+  }
 }
 
 async function main(): Promise<void> {
   verifyDeriveStates();
   verifyCompareToActive();
+  verifyAutonomousPlanningAnalysisEngine();
   await verifyAutonomousPlanningService();
   await verifyApplicationServiceIntegration();
 }

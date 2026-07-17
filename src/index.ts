@@ -18,6 +18,7 @@ import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor } from "./monitoring";
 import { TaskPlanner, WorkflowFactory } from "./planner";
 import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./planhistory";
+import { AutonomousPlanningAnalysisEngine } from "./plananalysis";
 import { AutonomousPlanningService } from "./plan";
 import { AutonomousPlanStateEngine } from "./planstate";
 import { ExecutionPipeline } from "./pipeline";
@@ -124,13 +125,24 @@ async function bootstrap(): Promise<void> {
   // compareToActive() hypothetical-comparison method, rather than
   // constructing a second instance. No ordering constraint, no seam needed.
   const autonomousPlanStateEngine = new AutonomousPlanStateEngine(autonomousPlanEvolutionEngine);
-  // Phase 9.4: the consumer-facing façade over the recorded-planning domain
-  // (autonomousPlanHistoryService + autonomousPlanStateEngine, both already
-  // built above) — ApplicationService now depends on this one instance
-  // instead of the two collaborators it composes, individually, itself.
-  // Neither collaborator changed; this is purely a re-wiring. No ordering
-  // constraint, no seam needed: both of its dependencies already exist.
-  const autonomousPlanningService = new AutonomousPlanningService(autonomousPlanHistoryService, autonomousPlanStateEngine);
+  // Phase 9.5: AutonomousPlanningAnalysisEngine is a pure transform, same
+  // shape as autonomousPlanStateEngine/autonomousPlanEvolutionEngine above —
+  // zero constructor dependencies, no ordering constraint, no seam needed.
+  // Constructed here, before the façade below, since the façade now takes it
+  // as a constructor dependency (it owns invoking the analysis engine
+  // itself, not ApplicationService).
+  const autonomousPlanningAnalysisEngine = new AutonomousPlanningAnalysisEngine();
+  // Phase 9.4 (extended in 9.5): the consumer-facing façade over the
+  // recorded-planning domain (autonomousPlanHistoryService +
+  // autonomousPlanStateEngine + autonomousPlanningAnalysisEngine, all
+  // already built above) — ApplicationService depends on this one instance
+  // instead of wiring any of the three individually itself. No ordering
+  // constraint, no seam needed: all three dependencies already exist.
+  const autonomousPlanningService = new AutonomousPlanningService(
+    autonomousPlanHistoryService,
+    autonomousPlanStateEngine,
+    autonomousPlanningAnalysisEngine,
+  );
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist

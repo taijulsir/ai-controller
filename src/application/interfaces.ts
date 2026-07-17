@@ -7,6 +7,7 @@ import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
+import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
@@ -49,6 +50,11 @@ export interface IApplicationService {
   // and the comparison between them, all describing the same instant.
   // Never records anything.
   getAutonomousPlanningSnapshot(): Promise<AutonomousPlanningSnapshot>;
+  // Phase 9.5: multi-cycle pattern analysis (chronic, sustained escalation,
+  // flapping) over a window of recorded cycles. Pure delegation —
+  // AutonomousPlanningService owns fetching the window and invoking the
+  // analysis engine; this class never re-derives it.
+  getAutonomousPlanAnalysis(limit?: number): Promise<AutonomousPlanAnalysisReport>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.
