@@ -33,7 +33,7 @@ import { RuntimePolicyEngine } from "./policy";
 import { RecommendationEngine } from "./recommendations";
 import { RepositoryRegistry } from "./repositories";
 import { RuntimeReportingEngine } from "./reporting";
-import { AutonomousPlanRecordingWorker, BackgroundRuntime, MonitoringWorker } from "./runtime";
+import { AutonomousExecutionWorker, AutonomousPlanRecordingWorker, BackgroundRuntime, MonitoringWorker } from "./runtime";
 import { ClaudeSessionManager } from "./session";
 import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
@@ -218,21 +218,78 @@ async function bootstrap(): Promise<void> {
     autonomousPlanRecordingService,
   );
 
+  // Strategy Engine / Planning Engine / Execution Coordinator (Phases 7.1-7.3)
+  // are the autonomous decision-support stack: Task -> TaskExecutionStrategy
+  // -> ExecutionPlan -> CapabilityProgram. None of them execute anything —
+  // ExecutionPipeline below is what finally turns a CapabilityProgram into
+  // real ControllerCore calls.
+  //
+  // Phase 13: moved up from its original position (originally built after
+  // the Background Runtime cluster below) so that executionPipeline exists
+  // in time for AutonomousExecutionOrchestrator/AutonomousExecutionWorker to
+  // be constructed before backgroundRuntime — a real ordering requirement,
+  // not a stylistic one: BackgroundRuntime's own worker array is fixed at
+  // construction time, and AutonomousExecutionWorker (below) needs a real
+  // orchestrator, which needs a real executionPipeline. Nothing in this
+  // block ever depended on anything in the Background Runtime cluster
+  // (runtimePolicyEngine/proactiveMonitor/attentionDispatcher/
+  // monitoringWorker/backgroundRuntime) — the two clusters are, and always
+  // were, independent subgraphs that merely happened to be written in this
+  // file in the other order.
+  const strategyEngine = new StrategyEngine(decisionEngine, contextBuilder, sessionManager);
+  const planningEngine = new PlanningEngine();
+  const executionCoordinator = new ExecutionCoordinator();
+
+  const workflowFactory = new WorkflowFactory(configService, repositoryRegistry, sessionManager);
+  const taskPlanner = new TaskPlanner(configService, workflowFactory);
+
+  // WorkflowOrchestrator needs "the top-of-stack IControllerCore" (plain, or
+  // ApprovalEngine-wrapped, now also memory-recording) so every step it runs
+  // still passes through approval and gets recorded — but that instance
+  // doesn't exist yet until after ControllerCore (which needs the
+  // orchestrator) is built. DeferredControllerCore is the seam: bound below,
+  // once the real entry point is known. ExecutionPipeline is given this same
+  // seam, not a later concrete instance, so it resolves correctly regardless
+  // of whether Telegram ends up enabled below — identical to how
+  // WorkflowOrchestrator already depends on it.
+  const controllerEntryPoint = new DeferredControllerCore();
+  const workflowRegistry = new WorkflowRegistry();
+  const workflowOrchestrator = new WorkflowOrchestrator(controllerEntryPoint, workflowRegistry);
+  const executionPipeline = new ExecutionPipeline(
+    repositoryIntelligence,
+    strategyEngine,
+    planningEngine,
+    executionCoordinator,
+    controllerEntryPoint,
+  );
+
+  const plainControllerCore = new ControllerCore(repositoryRegistry, taskPlanner, workflowOrchestrator);
+
+  // Phase 11 (extended in Phase 12/13): the first, and now the third,
+  // execution-capable component's shared entry point. Reuses this exact
+  // applicationService and executionPipeline instance — no new resource, no
+  // new ordering constraint. Constructed once, here, and reused by both
+  // TelegramAdapter (inside the telegram.enabled branch below) and
+  // AutonomousExecutionWorker (in the Background Runtime cluster
+  // immediately below) rather than each building its own instance.
+  const autonomousExecutionOrchestrator = new AutonomousExecutionOrchestrator(applicationService, executionPipeline);
+
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
-  // policy in Phase 8.4; a second worker added in Phase 10.1): RuntimePolicyEngine,
-  // ProactiveMonitor, AttentionDispatcher, MonitoringWorker,
-  // AutonomousPlanRecordingWorker, and BackgroundRuntime are constructed and
-  // started together, immediately after the read-only intelligence cluster
-  // they depend on, rather than scattered across bootstrap — they are one
-  // unit of composition. None of them depend on Telegram or on the
-  // decision-pipeline/execution stack built below, and BackgroundRuntime's
-  // lifecycle (start here, stop in the shared shutdown handler at the bottom
-  // of this function) is intentionally independent of whether Telegram ends
-  // up enabled: monitoring and recording must keep running whether or not
-  // any transport is active. MonitoringWorker stays read-only — its
-  // dependencies are IProactiveMonitor, IRepositoryRegistry,
-  // IAttentionDispatcher, and IRuntimePolicyEngine, none of which can execute
-  // a Task/workflow or reach ControllerCore/ExecutionPipeline.
+  // policy in Phase 8.4; a second worker added in Phase 10.1, a third in
+  // Phase 13): RuntimePolicyEngine, ProactiveMonitor, AttentionDispatcher,
+  // MonitoringWorker, AutonomousPlanRecordingWorker, AutonomousExecutionWorker,
+  // and BackgroundRuntime are constructed and started together, immediately
+  // after the read-only intelligence cluster and the execution stack above
+  // (both now already built) they depend on, rather than scattered across
+  // bootstrap — they are one unit of composition. None of them depend on
+  // Telegram, and BackgroundRuntime's lifecycle (start here, stop in the
+  // shared shutdown handler at the bottom of this function) is intentionally
+  // independent of whether Telegram ends up enabled: monitoring, recording,
+  // and autonomous execution must keep running whether or not any transport
+  // is active. MonitoringWorker stays read-only — its dependencies are
+  // IProactiveMonitor, IRepositoryRegistry, IAttentionDispatcher, and
+  // IRuntimePolicyEngine, none of which can execute a Task/workflow or reach
+  // ControllerCore/ExecutionPipeline.
   //
   // RuntimePolicyEngine is constructed with its internal defaults (quiet
   // hours, per-repository cooldown, global notification-per-interval limit —
@@ -260,6 +317,19 @@ async function bootstrap(): Promise<void> {
   // dependency capable of X, by construction" guarantee. No change to
   // ApplicationService itself was needed — it already implements the one
   // method the narrow interface requires.
+  //
+  // Phase 13: AutonomousExecutionWorker is passed applicationService typed
+  // as IAutonomousPlanScheduleProvider, projectMemory typed as
+  // IRecentExecutionHistoryProvider (never the full IProjectMemoryService —
+  // this worker must never call record() itself, since every execution it
+  // triggers is already recorded automatically further up the
+  // MemoryRecordingControllerCore-wrapped stack once Telegram is enabled),
+  // and the autonomousExecutionOrchestrator instance built above. It never
+  // supplies a correlationId to attemptExecution() — there is no chat this
+  // worker's own trigger could ever correlate back to — so any
+  // approval-gated step downstream is denied by TelegramApprovalProvider's
+  // own existing, unmodified logic. This is deliberate, not a gap: the same
+  // fail-closed behavior every non-Telegram caller has always had.
   const runtimePolicyEngine = new RuntimePolicyEngine();
   const proactiveMonitor = new ProactiveMonitor(applicationService);
   const attentionDispatcher = new AttentionDispatcher(runtimePolicyEngine);
@@ -270,7 +340,8 @@ async function bootstrap(): Promise<void> {
     runtimePolicyEngine,
   );
   const autonomousPlanRecordingWorker = new AutonomousPlanRecordingWorker(applicationService);
-  const backgroundRuntime = new BackgroundRuntime([monitoringWorker, autonomousPlanRecordingWorker]);
+  const autonomousExecutionWorker = new AutonomousExecutionWorker(applicationService, projectMemory, autonomousExecutionOrchestrator);
+  const backgroundRuntime = new BackgroundRuntime([monitoringWorker, autonomousPlanRecordingWorker, autonomousExecutionWorker]);
   backgroundRuntime.start();
 
   // Phase 8.5: the real RuntimeStatusService can only be built now that
@@ -309,40 +380,6 @@ async function bootstrap(): Promise<void> {
     runtimePolicyEngine,
   );
   deferredRuntimeAdministrationService.bind(runtimeAdministrationService);
-
-  // Strategy Engine / Planning Engine / Execution Coordinator (Phases 7.1-7.3)
-  // are the autonomous decision-support stack: Task -> TaskExecutionStrategy
-  // -> ExecutionPlan -> CapabilityProgram. None of them execute anything —
-  // ExecutionPipeline below is what finally turns a CapabilityProgram into
-  // real ControllerCore calls.
-  const strategyEngine = new StrategyEngine(decisionEngine, contextBuilder, sessionManager);
-  const planningEngine = new PlanningEngine();
-  const executionCoordinator = new ExecutionCoordinator();
-
-  const workflowFactory = new WorkflowFactory(configService, repositoryRegistry, sessionManager);
-  const taskPlanner = new TaskPlanner(configService, workflowFactory);
-
-  // WorkflowOrchestrator needs "the top-of-stack IControllerCore" (plain, or
-  // ApprovalEngine-wrapped, now also memory-recording) so every step it runs
-  // still passes through approval and gets recorded — but that instance
-  // doesn't exist yet until after ControllerCore (which needs the
-  // orchestrator) is built. DeferredControllerCore is the seam: bound below,
-  // once the real entry point is known. ExecutionPipeline is given this same
-  // seam, not a later concrete instance, so it resolves correctly regardless
-  // of whether Telegram ends up enabled below — identical to how
-  // WorkflowOrchestrator already depends on it.
-  const controllerEntryPoint = new DeferredControllerCore();
-  const workflowRegistry = new WorkflowRegistry();
-  const workflowOrchestrator = new WorkflowOrchestrator(controllerEntryPoint, workflowRegistry);
-  const executionPipeline = new ExecutionPipeline(
-    repositoryIntelligence,
-    strategyEngine,
-    planningEngine,
-    executionCoordinator,
-    controllerEntryPoint,
-  );
-
-  const plainControllerCore = new ControllerCore(repositoryRegistry, taskPlanner, workflowOrchestrator);
 
   const controllerConfig = configService.getControllerConfig();
   const repositories = repositoryRegistry.getAllRepositories();
@@ -395,15 +432,11 @@ async function bootstrap(): Promise<void> {
   // against controllerEntryPoint, so it transparently reaches this same
   // fully-decorated controllerCore (approval-gated, memory-recording) now
   // that binding has happened, identical to how WorkflowOrchestrator does.
-  // Phase 12: reuses these exact same applicationService and executionPipeline
-  // instances (both already built above) -- no new resource, no new
-  // ordering constraint. Constructed here, inside the Telegram-enabled
-  // branch, since TelegramAdapter (the one consumer that gives this
-  // instance a real caller) only exists in this branch too -- unlike Phase
-  // 11, where nothing consumed it yet, so it stayed out of this file
-  // entirely. Still never wired into BackgroundRuntime, and nothing besides
-  // this one Telegram command ever calls attemptExecution().
-  const autonomousExecutionOrchestrator = new AutonomousExecutionOrchestrator(applicationService, executionPipeline);
+  // Phase 12 (rewired in Phase 13): reuses the exact same
+  // autonomousExecutionOrchestrator instance built earlier in this function
+  // (Phase 13 moved its construction above the Background Runtime cluster,
+  // since AutonomousExecutionWorker now also needs it) — TelegramAdapter and
+  // AutonomousExecutionWorker share one orchestrator instance, not two.
   const telegramAdapter = new TelegramAdapter(
     executionPipeline,
     applicationService,
