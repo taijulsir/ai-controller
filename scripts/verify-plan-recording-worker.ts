@@ -161,6 +161,128 @@ async function main(): Promise<void> {
     assert(recorder.recordCalls >= 2, `a throwing recorder does not stop future ticks from occurring (saw ${recorder.recordCalls} attempted calls)`);
   }
 
+  // Phase 10.3: getStatus() before the worker ever starts -- no tick has run,
+  // so every bookkeeping field must be at its untouched default.
+  {
+    const recorder = new FakeCycleRecorder();
+    const worker = new AutonomousPlanRecordingWorker(recorder, 20);
+
+    const status = worker.getStatus();
+    assert(status.running === false, "getStatus() before start() reports running: false");
+    assert(status.lastSuccessfulCycleAt === undefined, "getStatus() before start() reports no lastSuccessfulCycleAt");
+    assert(status.lastRecordedCycleNumber === undefined, "getStatus() before start() reports no lastRecordedCycleNumber");
+    assert(status.lastError === undefined, "getStatus() before start() reports no lastError");
+  }
+
+  // Phase 10.3: getStatus() reflects running: true immediately once start()
+  // is called, before any tick has necessarily fired yet.
+  {
+    const recorder = new FakeCycleRecorder();
+    const worker = new AutonomousPlanRecordingWorker(recorder, 20);
+
+    worker.start();
+    assert(worker.getStatus().running === true, "getStatus() reports running: true once start() has been called");
+    worker.stop();
+  }
+
+  // Phase 10.3: getStatus() after a successful recording reflects the real
+  // outcome of that tick -- not a placeholder, and not independently
+  // tracked from the tick() logic that actually ran.
+  {
+    const recorder = new FakeCycleRecorder();
+    const worker = new AutonomousPlanRecordingWorker(recorder, 20);
+
+    worker.start();
+    await delay(25); // at least one tick
+    worker.stop();
+
+    const status = worker.getStatus();
+    assert(status.running === false, "getStatus() reports running: false once stop() has been called");
+    assert(status.lastSuccessfulCycleAt instanceof Date, "getStatus() reports a lastSuccessfulCycleAt timestamp once at least one tick has succeeded");
+    assert(status.lastRecordedCycleNumber === recorder.recordCalls, `getStatus() reports the exact cycle number the last successful tick recorded (expected ${recorder.recordCalls}, saw ${status.lastRecordedCycleNumber})`);
+    assert(status.lastError === undefined, "getStatus() reports no lastError after a run with only successful ticks");
+  }
+
+  // Phase 10.3: getStatus() after a failed recording surfaces the error,
+  // without fabricating success fields that never happened.
+  {
+    const recorder = new FakeCycleRecorder(0, true);
+    const worker = new AutonomousPlanRecordingWorker(recorder, 20);
+
+    worker.start();
+    await delay(25); // at least one failed tick
+    worker.stop();
+
+    const status = worker.getStatus();
+    assert(status.lastError === "recorder refuses to record", `getStatus() reports the exact error message from the last failed tick (saw ${JSON.stringify(status.lastError)})`);
+    assert(status.lastSuccessfulCycleAt === undefined, "getStatus() reports no lastSuccessfulCycleAt when every tick so far has failed");
+    assert(status.lastRecordedCycleNumber === undefined, "getStatus() reports no lastRecordedCycleNumber when every tick so far has failed");
+  }
+
+  // Phase 10.3: lastError clears on a subsequent success, and
+  // lastSuccessfulCycleAt/lastRecordedCycleNumber survive a later failure --
+  // the two halves of status are independent, not reset by each other.
+  // Compares against the fake's own observed counters throughout (never a
+  // hardcoded tick count), the same robustness-against-timer-jitter
+  // convention every other timing-sensitive assertion in this file already
+  // uses -- exactly how many ticks land in each phase's delay window is
+  // never asserted, only the relationship between status and what actually
+  // happened.
+  {
+    let shouldFail = true;
+    const recorder = new FakeCycleRecorder();
+    const originalRecord = recorder.recordAutonomousPlanCycle.bind(recorder);
+    recorder.recordAutonomousPlanCycle = async () => {
+      if (shouldFail) {
+        throw new Error("first attempt fails");
+      }
+      return originalRecord();
+    };
+    const worker = new AutonomousPlanRecordingWorker(recorder, 15);
+
+    worker.start();
+    await delay(20); // let at least one failing tick run
+    worker.stop();
+    const afterFailure = worker.getStatus();
+    assert(afterFailure.lastError === "first attempt fails", "lastError reflects a tick's failure before any success has occurred");
+    assert(afterFailure.lastSuccessfulCycleAt === undefined, "no success recorded yet -- lastSuccessfulCycleAt stays undefined after only failures");
+    assert(recorder.recordCalls === 0, "the underlying recorder was never actually reached while every attempt failed before calling it");
+
+    shouldFail = false;
+    worker.start();
+    await delay(20); // let at least one successful tick run
+    worker.stop();
+    const afterSuccess = worker.getStatus();
+    const successesSoFar = recorder.recordCalls;
+    assert(successesSoFar >= 1, "at least one tick succeeded once shouldFail was cleared");
+    assert(afterSuccess.lastError === undefined, "lastError is cleared once a subsequent tick succeeds");
+    assert(afterSuccess.lastSuccessfulCycleAt instanceof Date, "lastSuccessfulCycleAt is populated by a successful tick after a prior failure");
+    assert(afterSuccess.lastRecordedCycleNumber === successesSoFar, `lastRecordedCycleNumber matches the exact number of successful ticks so far (saw ${afterSuccess.lastRecordedCycleNumber}, expected ${successesSoFar})`);
+
+    shouldFail = true;
+    worker.start();
+    await delay(20); // a later failure must not erase the earlier success
+    worker.stop();
+    const afterLaterFailure = worker.getStatus();
+    assert(afterLaterFailure.lastError === "first attempt fails", "a later failure updates lastError again");
+    assert(afterLaterFailure.lastSuccessfulCycleAt instanceof Date, "a later failure does not clear a previously recorded lastSuccessfulCycleAt");
+    assert(afterLaterFailure.lastRecordedCycleNumber === successesSoFar, "a later failure does not change a previously recorded lastRecordedCycleNumber -- no further successes occurred to update it");
+    assert(recorder.recordCalls === successesSoFar, "the underlying recorder was not reached again once shouldFail was set back to true");
+  }
+
+  // Phase 10.3: none of the above touched scheduling or execution logic --
+  // repeated recording still works exactly as it did before this phase.
+  {
+    const recorder = new FakeCycleRecorder();
+    const worker = new AutonomousPlanRecordingWorker(recorder, 15);
+
+    worker.start();
+    await delay(50);
+    worker.stop();
+
+    assert(recorder.recordCalls >= 2, `getStatus() is purely additive -- the worker still ticks and records repeatedly exactly as before (saw ${recorder.recordCalls} calls)`);
+  }
+
   // BackgroundRuntime composes a real AutonomousPlanRecordingWorker exactly
   // as src/index.ts's Phase 10.1 wiring does, alongside a second worker --
   // proving both integrate correctly together, with independent lifecycles.

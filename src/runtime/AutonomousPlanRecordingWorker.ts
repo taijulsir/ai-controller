@@ -30,6 +30,17 @@ export class AutonomousPlanRecordingWorker implements IBackgroundWorker {
 
   private intervalHandle?: NodeJS.Timeout;
   private ticking = false;
+  // Phase 10.3: additive bookkeeping only, updated inside tick()'s existing
+  // try/catch/finally — no change to tick()'s control flow, scheduling, or
+  // outcome. lastSuccessfulCycleAt/lastRecordedCycleNumber are updated only
+  // on a successful recording and are never cleared by a later failure —
+  // they answer "how stale is the data" independently of "is the worker
+  // currently failing." lastError reflects only the most recent tick: set on
+  // failure, cleared on the next success — it answers "is this worker
+  // healthy right now," not a running failure history.
+  private lastSuccessfulCycleAt?: Date;
+  private lastRecordedCycleNumber?: number;
+  private lastError?: string;
 
   constructor(
     private readonly recorder: IAutonomousPlanCycleRecorder,
@@ -70,13 +81,33 @@ export class AutonomousPlanRecordingWorker implements IBackgroundWorker {
     try {
       const entry = await this.recorder.recordAutonomousPlanCycle();
       console.log(`autonomous-plan-recording-worker: recorded cycle ${entry.cycleNumber}`);
+      this.lastSuccessfulCycleAt = new Date();
+      this.lastRecordedCycleNumber = entry.cycleNumber;
+      this.lastError = undefined;
     } catch (error) {
       // Caught and logged, never rethrown — a failed recording must never
       // stop this worker's timer or propagate out of the interval callback,
-      // same as MonitoringWorker's own tick() failure handling.
-      console.error("autonomous-plan-recording-worker: tick failed:", error instanceof Error ? error.message : error);
+      // same as MonitoringWorker's own tick() failure handling. Unchanged by
+      // Phase 10.3 except for also recording the message below.
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("autonomous-plan-recording-worker: tick failed:", message);
+      this.lastError = message;
     } finally {
       this.ticking = false;
     }
+  }
+
+  // Concrete, additive method — deliberately not part of IBackgroundWorker
+  // (whose contract stays generic across any future worker type), same
+  // reasoning MonitoringWorker.getStatus() already established. Read-only:
+  // reports state already tracked for tick()'s own bookkeeping above, never
+  // triggers a tick or any other side effect.
+  getStatus(): { running: boolean; lastSuccessfulCycleAt?: Date; lastRecordedCycleNumber?: number; lastError?: string } {
+    return {
+      running: this.intervalHandle !== undefined,
+      lastSuccessfulCycleAt: this.lastSuccessfulCycleAt,
+      lastRecordedCycleNumber: this.lastRecordedCycleNumber,
+      lastError: this.lastError,
+    };
   }
 }
