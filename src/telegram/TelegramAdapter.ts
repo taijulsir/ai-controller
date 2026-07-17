@@ -1,4 +1,5 @@
 import type { IApplicationService } from "../application/interfaces";
+import type { IAutonomousExecutionOrchestrator } from "../autonomousexecution/interfaces";
 import type { IExecutionPipeline } from "../pipeline/interfaces";
 import type { PipelineRequest } from "../pipeline/types";
 import { CommandParser } from "./CommandParser";
@@ -26,6 +27,10 @@ export class TelegramAdapter implements ITelegramAdapter {
     private readonly applicationService: IApplicationService,
     private readonly telegramSecurity: ITelegramSecurity,
     private readonly telegramClient: ITelegramClient,
+    // Phase 12: the one place a Telegram command reaches
+    // AutonomousExecutionOrchestrator. Inserted before the two defaulted
+    // parameters below so neither has to move.
+    private readonly autonomousExecutionOrchestrator: IAutonomousExecutionOrchestrator,
     private readonly commandParser: ICommandParser = new CommandParser(),
     private readonly responseFormatter: IResponseFormatter = new ResponseFormatter(),
   ) {}
@@ -65,7 +70,27 @@ export class TelegramAdapter implements ITelegramAdapter {
       return;
     }
 
+    // Built once here, before either remaining branch, since both need it:
+    // the existing task/workflow path (below) and the new autonomous-execute
+    // path each pass this same real chat/update-derived id into a "pipeline"
+    // request, exactly as buildTelegramCorrelationId's own doc comment
+    // anticipates for TelegramApprovalProvider to route an approval prompt
+    // back to this chat.
     const correlationId = buildTelegramCorrelationId(chatId, update.updateId);
+
+    if (parsed.kind === "autonomous-execute") {
+      try {
+        const result = await this.autonomousExecutionOrchestrator.attemptExecution(correlationId);
+        await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatAutonomousExecutionResult(result) });
+      } catch (error) {
+        await this.telegramClient.sendMessage({
+          chatId,
+          text: `Something went wrong: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+      return;
+    }
+
     const pipelineRequest = this.buildPipelineRequest(parsed, correlationId);
 
     try {

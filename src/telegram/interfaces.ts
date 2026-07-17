@@ -37,6 +37,10 @@ export interface IResponseFormatter {
   formatInsights(report: RepositoryInsightReport): string;
   formatSessionStatus(info: ClaudeSessionInfo | undefined): string;
   formatPipelineResult(result: PipelineResult): string;
+  // Phase 12: result is exactly what AutonomousExecutionOrchestrator.attemptExecution()
+  // returned -- undefined means nothing eligible was found, never a
+  // fabricated report standing in for a real attempt.
+  formatAutonomousExecutionResult(result: PipelineResult | undefined): string;
   // Phase 8.10: all five consume the same RuntimeReport shape and only
   // select/join its already-produced title/health/summary/section content —
   // none of them reformat a value, reinterpret a finding, or parse a

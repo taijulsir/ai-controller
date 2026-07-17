@@ -61,6 +61,13 @@ export class CommandParser implements ICommandParser {
       return { kind: "workflow", workflowId: "ship", input: { message: args }, repositoryId };
     }
 
+    // Phase 12: no repositoryId/args of its own -- AutonomousExecutionOrchestrator
+    // decides which repository (if any) to attempt from the schedule itself,
+    // the same way it already does for every non-Telegram caller.
+    if (normalizedCommand === "auto-execute") {
+      return { kind: "autonomous-execute" };
+    }
+
     if (normalizedCommand && QUERY_COMMANDS.has(normalizedCommand)) {
       return { kind: "query", query: this.buildQuery(normalizedCommand, args), repositoryId };
     }

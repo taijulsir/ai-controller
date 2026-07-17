@@ -31,7 +31,7 @@ export class AutonomousExecutionOrchestrator implements IAutonomousExecutionOrch
     private readonly executionPipeline: IExecutionPipeline,
   ) {}
 
-  async attemptExecution(): Promise<PipelineResult | undefined> {
+  async attemptExecution(correlationId?: string): Promise<PipelineResult | undefined> {
     // limit: 1 -- only the single highest-priority entry is ever consulted,
     // and the descriptive pipeline's own ordering means requesting more
     // could never change which entry that is.
@@ -41,7 +41,7 @@ export class AutonomousExecutionOrchestrator implements IAutonomousExecutionOrch
       return undefined;
     }
 
-    const request = this.translate(topEntry);
+    const request = this.translate(topEntry, correlationId);
     if (!request) {
       return undefined;
     }
@@ -52,7 +52,7 @@ export class AutonomousExecutionOrchestrator implements IAutonomousExecutionOrch
   // The one place a RecommendationKind is checked. Every kind other than
   // "RepositoryReadyToShip" returns undefined -- no fallback, no best-effort
   // guess, no partial translation.
-  private translate(entry: AutonomousPlanSchedulingEntry): PipelineRequest | undefined {
+  private translate(entry: AutonomousPlanSchedulingEntry, correlationId?: string): PipelineRequest | undefined {
     if (entry.sourceRecommendationKind !== "RepositoryReadyToShip") {
       return undefined;
     }
@@ -66,10 +66,13 @@ export class AutonomousExecutionOrchestrator implements IAutonomousExecutionOrch
       // than authored by a person.
       message: `autonomous-execution: ship ${entry.repositoryId} (readiness ${entry.level})`,
       repositoryId: entry.repositoryId,
-      // correlationId intentionally omitted -- PipelineRequest's own doc
-      // comment anticipates exactly this: "a future non-Telegram trigger
-      // with no chat to correlate back to." ExecutionPipeline generates one
-      // internally when absent.
+      // Phase 12: forwarded unchanged from attemptExecution()'s own
+      // parameter when a caller supplies one (e.g. Telegram's own
+      // chat/update-derived id, needed for TelegramApprovalProvider to route
+      // an approval prompt back to the right chat). When omitted,
+      // ExecutionPipeline generates one internally -- Phase 11's exact
+      // original behavior, unchanged.
+      correlationId,
     };
   }
 }

@@ -50,4 +50,9 @@ export type ApplicationQuery =
 export type ParsedCommand =
   | { kind: "task"; task: Task; repositoryId?: string }
   | { kind: "workflow"; workflowId: string; input: Record<string, unknown>; repositoryId?: string }
-  | { kind: "query"; query: ApplicationQuery; repositoryId?: string };
+  | { kind: "query"; query: ApplicationQuery; repositoryId?: string }
+  // Phase 12: manually triggers AutonomousExecutionOrchestrator.attemptExecution()
+  // exactly once. Carries no task/workflow/query data of its own -- the
+  // orchestrator reads its own input (the schedule), it never receives one
+  // from this command.
+  | { kind: "autonomous-execute" };

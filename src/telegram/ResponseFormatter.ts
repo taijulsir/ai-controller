@@ -149,6 +149,51 @@ export class ResponseFormatter implements IResponseFormatter {
     return lines.join("\n");
   }
 
+  // Phase 12: classifies the same PipelineResult formatPipelineResult()
+  // already knows how to render into one of four operator-facing outcomes.
+  // By the time this is called, AutonomousExecutionOrchestrator has already
+  // awaited the full run -- including any Telegram approval round-trip via
+  // TelegramApprovalProvider -- so "approval required" here describes a
+  // *discovered fact about the completed run* (a gated step was denied or
+  // timed out), not a still-pending state; there is no pending state left to
+  // report once attemptExecution() has resolved.
+  formatAutonomousExecutionResult(result: PipelineResult | undefined): string {
+    if (!result) {
+      return "Nothing eligible for autonomous execution right now.";
+    }
+
+    // Structurally unreachable from this orchestrator's own translation (it
+    // only ever builds "pipeline" requests), but handled honestly rather
+    // than assumed away.
+    if (result.path === "bypass") {
+      return `Autonomous execution started.\n\n${this.format(result.result)}`;
+    }
+
+    const shipOutcome = result.stepOutcomes.find((outcome) => outcome.capability === "IntegratedDelivery");
+    if (!shipOutcome || shipOutcome.status !== "executed" || shipOutcome.result.kind !== "workflow") {
+      // A structural gap (blocked) or data gap (skipped) at the outer step,
+      // or no IntegratedDelivery step at all -- this orchestrator's own
+      // translation always targets the ship workflow, so anything else here
+      // is reported as a failure, never silently as success.
+      return `Autonomous execution failed.\n\n${this.formatPipelineResult(result)}`;
+    }
+
+    const workflowResult = shipOutcome.result.workflowResult;
+    const deniedStep = workflowResult.steps.find(
+      (step) => step.executionResult.kind === "task" && step.executionResult.approval?.required === true && !step.executionResult.taskResult.success,
+    );
+    if (deniedStep && deniedStep.executionResult.kind === "task") {
+      const reason = deniedStep.executionResult.taskResult.error ?? "not approved";
+      return `Approval required: "${deniedStep.taskType}" was not approved (${reason}).`;
+    }
+
+    if (result.completed) {
+      return `Autonomous execution started.\n\n${this.formatWorkflowResult(workflowResult)}`;
+    }
+
+    return `Autonomous execution failed.\n\n${this.formatWorkflowResult(workflowResult)}`;
+  }
+
   private formatPipelineStepOutcome(outcome: PipelineStepOutcome): string {
     switch (outcome.status) {
       case "executed": {

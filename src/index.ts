@@ -22,6 +22,7 @@ import { AutonomousPlanningAnalysisEngine } from "./plananalysis";
 import { AutonomousPlanningService } from "./plan";
 import { AutonomousPlanReadinessEngine } from "./planreadiness";
 import { AutonomousPlanRecordingService } from "./planrecording";
+import { AutonomousExecutionOrchestrator } from "./autonomousexecution";
 import { AutonomousPlanSequencingEngine } from "./plansequencing";
 import { AutonomousPlanStateEngine } from "./planstate";
 import { AutonomousPlanSchedulingEngine } from "./scheduling";
@@ -394,7 +395,22 @@ async function bootstrap(): Promise<void> {
   // against controllerEntryPoint, so it transparently reaches this same
   // fully-decorated controllerCore (approval-gated, memory-recording) now
   // that binding has happened, identical to how WorkflowOrchestrator does.
-  const telegramAdapter = new TelegramAdapter(executionPipeline, applicationService, telegramSecurity, telegramClient);
+  // Phase 12: reuses these exact same applicationService and executionPipeline
+  // instances (both already built above) -- no new resource, no new
+  // ordering constraint. Constructed here, inside the Telegram-enabled
+  // branch, since TelegramAdapter (the one consumer that gives this
+  // instance a real caller) only exists in this branch too -- unlike Phase
+  // 11, where nothing consumed it yet, so it stayed out of this file
+  // entirely. Still never wired into BackgroundRuntime, and nothing besides
+  // this one Telegram command ever calls attemptExecution().
+  const autonomousExecutionOrchestrator = new AutonomousExecutionOrchestrator(applicationService, executionPipeline);
+  const telegramAdapter = new TelegramAdapter(
+    executionPipeline,
+    applicationService,
+    telegramSecurity,
+    telegramClient,
+    autonomousExecutionOrchestrator,
+  );
   poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramApprovalProvider);
 
   console.log("Telegram transport enabled, starting long polling.");
