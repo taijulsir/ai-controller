@@ -173,8 +173,13 @@ export function validateTelegramConfig(data: unknown, filePath: string): Telegra
   const telegram = data.telegram;
   if (!isObject(telegram)) {
     issues.push('"telegram" section is missing or invalid');
-  } else if (!isBoolean(telegram.enabled)) {
-    issues.push('"telegram.enabled" must be a boolean');
+  } else {
+    if (!isBoolean(telegram.enabled)) issues.push('"telegram.enabled" must be a boolean');
+    // Phase 14: optional -- only validated when present, absence is valid
+    // and means Phase 13's fail-closed behavior is unchanged.
+    if (telegram.operator_chat_id !== undefined && !isNumber(telegram.operator_chat_id)) {
+      issues.push('"telegram.operator_chat_id" must be a number when present');
+    }
   }
 
   const bot = data.bot;

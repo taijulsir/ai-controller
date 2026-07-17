@@ -29,12 +29,22 @@ const RECENT_EXECUTION_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 // be attempted, before attempting it), IRecentExecutionHistoryProvider (to
 // decide whether to skip), and IAutonomousExecutionOrchestrator (to actually
 // attempt) — nothing else. Never depends on IExecutionPipeline, IControllerCore,
-// or IApprovalEngine directly, and never supplies a correlationId to
-// attemptExecution(): there is no chat this worker's own trigger could ever
-// correlate back to, so any approval-gated step downstream is denied by
-// TelegramApprovalProvider's own existing, unmodified logic — the same
-// fail-closed behavior Phase 11 always had for a non-Telegram caller,
-// preserved deliberately, not worked around.
+// or IApprovalEngine directly.
+//
+// Phase 14: correlationId is an optional, plain, opaque string — never a
+// Telegram-shaped type, never anything this class inspects or interprets.
+// It is computed once, by the composition root, using the existing
+// buildTelegramCorrelationId() (the one place outside src/telegram/
+// permitted to call it) and simply forwarded here as a constructor value,
+// the same shape PipelineRequest.correlationId/ExecutionRequest.correlationId
+// already have. When configured, it lets an approval-gated step downstream
+// actually reach a real, pre-designated chat instead of being denied
+// automatically. When omitted (the default, and Phase 13's exact original
+// behavior), there is no chat this worker's own trigger could ever
+// correlate back to, so TelegramApprovalProvider's own existing, unmodified
+// logic denies any approval-gated step — the same fail-closed behavior
+// Phase 11 always had for a non-Telegram caller, preserved deliberately as
+// the safe default, not worked around.
 //
 // The dedup check here is intentionally coarse: "was there any recorded
 // execution for this repository within the last window" is a proxy for
@@ -58,6 +68,10 @@ export class AutonomousExecutionWorker implements IBackgroundWorker {
     private readonly historyProvider: IRecentExecutionHistoryProvider,
     private readonly orchestrator: IAutonomousExecutionOrchestrator,
     private readonly intervalMs: number = DEFAULT_EXECUTION_INTERVAL_MS,
+    // Appended after intervalMs (not inserted before it) so every existing
+    // call site that already supplies intervalMs positionally continues to
+    // work unchanged.
+    private readonly correlationId?: string,
   ) {}
 
   start(): void {
@@ -105,10 +119,11 @@ export class AutonomousExecutionWorker implements IBackgroundWorker {
         return;
       }
 
-      // No correlationId supplied, deliberately — see this class's own doc
-      // comment. Never attempts to translate a RecommendationKind itself;
-      // that decision belongs entirely to the orchestrator, unchanged.
-      const result = await this.orchestrator.attemptExecution();
+      // Forwards this.correlationId verbatim -- undefined when not
+      // configured, preserving Phase 13's exact fail-closed behavior. Never
+      // attempts to translate a RecommendationKind itself; that decision
+      // belongs entirely to the orchestrator, unchanged.
+      const result = await this.orchestrator.attemptExecution(this.correlationId);
       console.log(
         result
           ? `autonomous-execution-worker: attempted execution for ${topEntry.repositoryId} (${topEntry.sourceRecommendationKind})`

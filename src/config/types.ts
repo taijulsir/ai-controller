@@ -69,6 +69,13 @@ export interface GithubConfig {
 export interface TelegramConfig {
   telegram: {
     enabled: boolean;
+    // Phase 14: optional. When present, the composition root builds one
+    // fixed, opaque correlationId from it at startup (via the existing
+    // Telegram correlation builder) and hands it to AutonomousExecutionWorker,
+    // so an autonomous approval-gated execution attempt can reach this real
+    // chat instead of always failing closed. When absent, Phase 13's
+    // fail-closed behavior is unchanged.
+    operator_chat_id?: number;
   };
 
   bot: {

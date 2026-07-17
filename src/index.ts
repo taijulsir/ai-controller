@@ -44,6 +44,7 @@ import {
   TelegramAttentionTransport,
   TelegramLongPoller,
   TelegramSecurity,
+  buildTelegramCorrelationId,
 } from "./telegram";
 
 function loadEnvFile(): void {
@@ -274,6 +275,30 @@ async function bootstrap(): Promise<void> {
   // immediately below) rather than each building its own instance.
   const autonomousExecutionOrchestrator = new AutonomousExecutionOrchestrator(applicationService, executionPipeline);
 
+  // Phase 14: fetched here — earlier than telegramConfig was previously
+  // read in this file (it used to be read only inside the telegram.enabled
+  // check below, which is reused as-is further down rather than re-fetched
+  // a second time) — because AutonomousExecutionWorker (in the Background
+  // Runtime cluster immediately below) needs operatorCorrelationId before
+  // it is constructed. Reading config is a pure, side-effect-free operation
+  // regardless of whether Telegram ends up enabled, so this is safe to do
+  // unconditionally, this early. operator_chat_id is optional: absent ->
+  // operatorCorrelationId is undefined -> AutonomousExecutionWorker behaves
+  // exactly as it did in Phase 13. Present -> buildTelegramCorrelationId()
+  // (the exact same, unmodified function TelegramAdapter already uses for
+  // real updates) builds one fixed, opaque string, computed once, never
+  // recomputed per tick — safe because AutonomousExecutionWorker's own
+  // re-entrancy guard already ensures at most one attemptExecution() call
+  // is ever in flight from this worker at a time, so reusing the same
+  // correlationId across ticks can never collide with itself. No new
+  // interface or class was introduced for this — operatorCorrelationId is a
+  // plain string, the same shape PipelineRequest.correlationId already is.
+  const telegramConfig = configService.getTelegramConfig();
+  const operatorCorrelationId =
+    telegramConfig.telegram.operator_chat_id !== undefined
+      ? buildTelegramCorrelationId(telegramConfig.telegram.operator_chat_id, 0)
+      : undefined;
+
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
   // policy in Phase 8.4; a second worker added in Phase 10.1, a third in
   // Phase 13): RuntimePolicyEngine, ProactiveMonitor, AttentionDispatcher,
@@ -318,18 +343,22 @@ async function bootstrap(): Promise<void> {
   // ApplicationService itself was needed — it already implements the one
   // method the narrow interface requires.
   //
-  // Phase 13: AutonomousExecutionWorker is passed applicationService typed
-  // as IAutonomousPlanScheduleProvider, projectMemory typed as
-  // IRecentExecutionHistoryProvider (never the full IProjectMemoryService —
-  // this worker must never call record() itself, since every execution it
-  // triggers is already recorded automatically further up the
-  // MemoryRecordingControllerCore-wrapped stack once Telegram is enabled),
-  // and the autonomousExecutionOrchestrator instance built above. It never
-  // supplies a correlationId to attemptExecution() — there is no chat this
-  // worker's own trigger could ever correlate back to — so any
-  // approval-gated step downstream is denied by TelegramApprovalProvider's
-  // own existing, unmodified logic. This is deliberate, not a gap: the same
-  // fail-closed behavior every non-Telegram caller has always had.
+  // Phase 13 (extended in Phase 14): AutonomousExecutionWorker is passed
+  // applicationService typed as IAutonomousPlanScheduleProvider,
+  // projectMemory typed as IRecentExecutionHistoryProvider (never the full
+  // IProjectMemoryService — this worker must never call record() itself,
+  // since every execution it triggers is already recorded automatically
+  // further up the MemoryRecordingControllerCore-wrapped stack once
+  // Telegram is enabled), and the autonomousExecutionOrchestrator instance
+  // built above. operatorCorrelationId (computed just above) is forwarded
+  // as-is — when undefined (operator_chat_id not configured), this worker
+  // behaves exactly as Phase 13 built it: no correlationId ever reaches
+  // attemptExecution(), so any approval-gated step downstream is denied by
+  // TelegramApprovalProvider's own existing, unmodified logic. When
+  // configured, the exact same denial logic instead finds a real chat to
+  // route the prompt to. Either way, this worker never inspects or
+  // interprets the value itself — it is an opaque string, exactly like
+  // PipelineRequest.correlationId already is everywhere else in this stack.
   const runtimePolicyEngine = new RuntimePolicyEngine();
   const proactiveMonitor = new ProactiveMonitor(applicationService);
   const attentionDispatcher = new AttentionDispatcher(runtimePolicyEngine);
@@ -340,7 +369,13 @@ async function bootstrap(): Promise<void> {
     runtimePolicyEngine,
   );
   const autonomousPlanRecordingWorker = new AutonomousPlanRecordingWorker(applicationService);
-  const autonomousExecutionWorker = new AutonomousExecutionWorker(applicationService, projectMemory, autonomousExecutionOrchestrator);
+  const autonomousExecutionWorker = new AutonomousExecutionWorker(
+    applicationService,
+    projectMemory,
+    autonomousExecutionOrchestrator,
+    undefined,
+    operatorCorrelationId,
+  );
   const backgroundRuntime = new BackgroundRuntime([monitoringWorker, autonomousPlanRecordingWorker, autonomousExecutionWorker]);
   backgroundRuntime.start();
 
@@ -402,7 +437,9 @@ async function bootstrap(): Promise<void> {
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
-  const telegramConfig = configService.getTelegramConfig();
+  // telegramConfig was already fetched above (Phase 14), before the
+  // Background Runtime cluster -- reused here rather than fetched a second
+  // time.
   if (!telegramConfig.telegram.enabled) {
     controllerEntryPoint.bind(new MemoryRecordingControllerCore(plainControllerCore, projectMemory));
     console.log("Telegram transport disabled (telegram.enabled = false in config/telegram.yaml).");
