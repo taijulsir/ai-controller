@@ -19,7 +19,33 @@ import type { ClaudeSessionInfo } from "../session/types";
 import type { RuntimeStatus } from "../status/types";
 import type { EngineeringWorkspace } from "../workspace/types";
 
-export interface IApplicationService {
+// Phase 10.1: the narrow view of IApplicationService's one write operation,
+// carved out specifically for AutonomousPlanRecordingWorker
+// (src/runtime/AutonomousPlanRecordingWorker.ts) — so that worker's
+// dependency is capable of nothing except triggering a recording, the same
+// "no dependency capable of X, by construction" guarantee every other
+// IBackgroundWorker already has (MonitoringWorker depends on
+// IProactiveMonitor/IRepositoryRegistry/IAttentionDispatcher/
+// IRuntimePolicyEngine, never the full IApplicationService). ApplicationService
+// requires no change to satisfy this: it already implements a method with
+// this exact name and signature, and IApplicationService below extends this
+// interface rather than redeclaring the method, so there is exactly one
+// declaration of it, not two.
+export interface IAutonomousPlanCycleRecorder {
+  // Phase 10: the first, and only, write operation IApplicationService
+  // exposes — named recordAutonomousPlanCycle(), not getX(), so it reads
+  // unambiguously as a write at every call site. Fetches the live plan via
+  // ApplicationService's own getAutonomousPlan() (unchanged, no second
+  // synthesis path), then delegates the write itself to
+  // AutonomousPlanRecordingService — ApplicationService never touches
+  // IAutonomousPlanHistoryService directly. As of Phase 10.1, this is called
+  // on a timer by AutonomousPlanRecordingWorker; deciding whether that
+  // cadence needs deduplication or retention policy remains a future
+  // phase's decision, not this one's.
+  recordAutonomousPlanCycle(): Promise<AutonomousPlanHistoryEntry>;
+}
+
+export interface IApplicationService extends IAutonomousPlanCycleRecorder {
   getRepositoryStatus(repositoryId?: string): Promise<RepositorySnapshot>;
   getRepositoryHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]>;
   getRepositoryInsights(repositoryId?: string): Promise<RepositoryInsightReport>;
@@ -81,19 +107,8 @@ export interface IApplicationService {
   // concept. The one place this class composes across the Plan Sequencing
   // and Scheduling domains.
   getAutonomousPlanSchedule(limit?: number): Promise<AutonomousPlanSchedulingReport>;
-  // Phase 10: the first, and only, write operation this class exposes —
-  // named recordAutonomousPlanCycle(), not getX(), so it reads unambiguously
-  // as a write at every call site, unlike every other method here. Fetches
-  // the live plan via this class's own getAutonomousPlan() (unchanged, no
-  // second synthesis path), then delegates the write itself to
-  // AutonomousPlanRecordingService — this class never touches
-  // IAutonomousPlanHistoryService directly. Nothing in this codebase calls
-  // this method automatically yet; deciding when a cycle should actually be
-  // recorded remains a future runtime/scheduler phase's decision, same as
-  // the deferred comment on AutonomousPlanHistoryService.record() always
-  // said — this is that deferred capability made explicit and callable, not
-  // that future scheduling decision itself.
-  recordAutonomousPlanCycle(): Promise<AutonomousPlanHistoryEntry>;
+  // recordAutonomousPlanCycle() lives on IAutonomousPlanCycleRecorder above,
+  // which this interface extends — see that interface's own doc comment.
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

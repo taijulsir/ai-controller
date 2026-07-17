@@ -32,7 +32,7 @@ import { RuntimePolicyEngine } from "./policy";
 import { RecommendationEngine } from "./recommendations";
 import { RepositoryRegistry } from "./repositories";
 import { RuntimeReportingEngine } from "./reporting";
-import { BackgroundRuntime, MonitoringWorker } from "./runtime";
+import { AutonomousPlanRecordingWorker, BackgroundRuntime, MonitoringWorker } from "./runtime";
 import { ClaudeSessionManager } from "./session";
 import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
@@ -218,16 +218,17 @@ async function bootstrap(): Promise<void> {
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by
-  // policy in Phase 8.4): RuntimePolicyEngine, ProactiveMonitor,
-  // AttentionDispatcher, MonitoringWorker, and BackgroundRuntime are
-  // constructed and started together, immediately after the read-only
-  // intelligence cluster they depend on, rather than scattered across
-  // bootstrap — they are one unit of composition. None of them depend on
-  // Telegram or on the decision-pipeline/execution stack built below, and
-  // BackgroundRuntime's lifecycle (start here, stop in the shared shutdown
-  // handler at the bottom of this function) is intentionally independent of
-  // whether Telegram ends up enabled: monitoring must keep running whether or
-  // not any transport is active. MonitoringWorker stays read-only — its
+  // policy in Phase 8.4; a second worker added in Phase 10.1): RuntimePolicyEngine,
+  // ProactiveMonitor, AttentionDispatcher, MonitoringWorker,
+  // AutonomousPlanRecordingWorker, and BackgroundRuntime are constructed and
+  // started together, immediately after the read-only intelligence cluster
+  // they depend on, rather than scattered across bootstrap — they are one
+  // unit of composition. None of them depend on Telegram or on the
+  // decision-pipeline/execution stack built below, and BackgroundRuntime's
+  // lifecycle (start here, stop in the shared shutdown handler at the bottom
+  // of this function) is intentionally independent of whether Telegram ends
+  // up enabled: monitoring and recording must keep running whether or not
+  // any transport is active. MonitoringWorker stays read-only — its
   // dependencies are IProactiveMonitor, IRepositoryRegistry,
   // IAttentionDispatcher, and IRuntimePolicyEngine, none of which can execute
   // a Task/workflow or reach ControllerCore/ExecutionPipeline.
@@ -248,6 +249,16 @@ async function bootstrap(): Promise<void> {
   // further down only if that branch is reached. MonitoringWorker never sees
   // this registration happen and never knows Telegram exists either way: it
   // only ever calls dispatch() on the IAttentionDispatcher abstraction.
+  //
+  // Phase 10.1: AutonomousPlanRecordingWorker is passed this exact same
+  // applicationService instance (already built above), but typed against
+  // IAutonomousPlanCycleRecorder — the narrow, single-method view carved out
+  // of IApplicationService specifically so this worker has no dependency
+  // capable of reaching getRuntimeControl()/getRuntimeAdministration()/any
+  // other IApplicationService surface, matching MonitoringWorker's own "no
+  // dependency capable of X, by construction" guarantee. No change to
+  // ApplicationService itself was needed — it already implements the one
+  // method the narrow interface requires.
   const runtimePolicyEngine = new RuntimePolicyEngine();
   const proactiveMonitor = new ProactiveMonitor(applicationService);
   const attentionDispatcher = new AttentionDispatcher(runtimePolicyEngine);
@@ -257,7 +268,8 @@ async function bootstrap(): Promise<void> {
     attentionDispatcher,
     runtimePolicyEngine,
   );
-  const backgroundRuntime = new BackgroundRuntime([monitoringWorker]);
+  const autonomousPlanRecordingWorker = new AutonomousPlanRecordingWorker(applicationService);
+  const backgroundRuntime = new BackgroundRuntime([monitoringWorker, autonomousPlanRecordingWorker]);
   backgroundRuntime.start();
 
   // Phase 8.5: the real RuntimeStatusService can only be built now that
