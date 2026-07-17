@@ -1,4 +1,5 @@
 import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlanEvolutionEngine";
+import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { AutonomousPlan, AutonomousPlanItem } from "../src/autonomy/types";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
@@ -293,16 +294,83 @@ class UnusedRuntimeAdministrationService implements IRuntimeAdministrationServic
 
 class RecordingAutonomousPlanHistoryService implements IAutonomousPlanHistoryService {
   public recordCalls = 0;
+  public getLatestEntryCalls = 0;
+  public getHistoryCalls = 0;
   constructor(private readonly latest: AutonomousPlanHistoryEntry | undefined, private readonly history: AutonomousPlanHistoryEntry[]) {}
   async record(): Promise<AutonomousPlanHistoryEntry> {
     this.recordCalls += 1;
-    throw new Error("ApplicationService must never call IAutonomousPlanHistoryService.record()");
+    throw new Error("must never call IAutonomousPlanHistoryService.record()");
   }
   async getLatestEntry(): Promise<AutonomousPlanHistoryEntry | undefined> {
+    this.getLatestEntryCalls += 1;
     return this.latest;
   }
   async getHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]> {
+    this.getHistoryCalls += 1;
     return limit ? this.history.slice(0, limit) : this.history;
+  }
+}
+
+// Direct tests of the Phase 9.4 façade itself — its three consumer-oriented
+// use cases, and the fetch-once discipline each one is supposed to hold.
+async function verifyAutonomousPlanningService(): Promise<void> {
+  const evolutionEngine = new AutonomousPlanEvolutionEngine();
+  const stateEngine = new AutonomousPlanStateEngine(evolutionEngine);
+
+  const plan1 = plan("p1", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]);
+  const plan2 = plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]);
+  const history = chain(evolutionEngine, [plan1, plan2]); // newest-first: p2, p1
+
+  // getRecentCycles(): one history fetch, entry + derived state paired for every cycle
+  {
+    const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
+    const service = new AutonomousPlanningService(historyService, stateEngine);
+
+    const cycles = await service.getRecentCycles();
+    assert(cycles.length === 2, "getRecentCycles() returns one summary per recorded cycle in the fetched window");
+    assert(cycles[0].entry.plan.id === "p2" && cycles[0].state.status === "active", "getRecentCycles()[0] pairs p2's entry with its active state");
+    assert(cycles[1].entry.plan.id === "p1" && cycles[1].state.status === "superseded", "getRecentCycles()[1] pairs p1's entry with its superseded state");
+    assert(historyService.getHistoryCalls === 1, "getRecentCycles() fetches history exactly once, reused for both entries and derived states");
+    assert(historyService.getLatestEntryCalls === 0, "getRecentCycles() never touches getLatestEntry()");
+    assert(historyService.recordCalls === 0, "getRecentCycles() never calls record()");
+
+    const limited = await service.getRecentCycles(1);
+    assert(limited.length === 1 && limited[0].entry.plan.id === "p2", "getRecentCycles(limit) forwards the limit to the underlying history fetch");
+  }
+
+  // getCurrentPlanState(): a single-entry fetch, not the full window
+  {
+    const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
+    const service = new AutonomousPlanningService(historyService, stateEngine);
+
+    const current = await service.getCurrentPlanState();
+    assert(current?.planId === "p2" && current?.status === "active", "getCurrentPlanState() returns the current authoritative plan's state");
+    assert(historyService.getLatestEntryCalls === 1, "getCurrentPlanState() calls getLatestEntry() exactly once");
+    assert(historyService.getHistoryCalls === 0, "getCurrentPlanState() never fetches the full history window just to answer 'what's current'");
+    assert(historyService.recordCalls === 0, "getCurrentPlanState() never calls record()");
+
+    const emptyService = new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine);
+    const noCurrent = await emptyService.getCurrentPlanState();
+    assert(noCurrent === undefined, "no cycle ever recorded -> getCurrentPlanState() is undefined, not a fabricated state");
+  }
+
+  // getPlanningStatus(livePlan): one active-entry fetch, reused for both currentState and comparison
+  {
+    const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
+    const service = new AutonomousPlanningService(historyService, stateEngine);
+    const livePlan = plan("live", []); // diverges from p2's non-empty item set
+
+    const snapshot = await service.getPlanningStatus(livePlan);
+    assert(snapshot.plan === livePlan, "getPlanningStatus() carries the exact live plan it was given");
+    assert(snapshot.currentState?.planId === "p2" && snapshot.currentState?.status === "active", "getPlanningStatus() derives currentState from the same active entry as the comparison");
+    assert(snapshot.comparison.hasActivePlan === true && snapshot.comparison.matchesActivePlan === false, "getPlanningStatus()'s comparison reflects that the empty live plan diverges from the non-empty active plan p2");
+    assert(historyService.getLatestEntryCalls === 1, "getPlanningStatus() fetches the active entry exactly once, reused for both currentState and the comparison -- never two independent reads that could disagree");
+    assert(historyService.recordCalls === 0, "getPlanningStatus() never calls record() -- it is a pure 'what if' query");
+
+    const emptyService = new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine);
+    const noActiveSnapshot = await emptyService.getPlanningStatus(livePlan);
+    assert(noActiveSnapshot.currentState === undefined, "no cycle ever recorded -> getPlanningStatus().currentState is undefined");
+    assert(noActiveSnapshot.comparison.hasActivePlan === false, "no cycle ever recorded -> getPlanningStatus().comparison.hasActivePlan is false");
   }
 }
 
@@ -314,6 +382,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
   const plan2 = plan("p2", [item({ repositoryId: "alpha", sourceRecommendationKind: "PullRequired" })]);
   const history = chain(evolutionEngine, [plan1, plan2]); // newest-first: p2, p1
   const historyService = new RecordingAutonomousPlanHistoryService(history[0], history);
+  const autonomousPlanningService = new AutonomousPlanningService(historyService, stateEngine);
 
   function buildService(repositories: Repository[]): IApplicationService {
     return new ApplicationService(
@@ -330,8 +399,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
       new UnusedRuntimeControlService(),
       new UnusedRuntimeAdministrationService(),
       new AutonomousPlanningEngine(),
-      historyService,
-      stateEngine,
+      autonomousPlanningService,
     );
   }
 
@@ -359,8 +427,7 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
     new UnusedRuntimeControlService(),
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
-    new RecordingAutonomousPlanHistoryService(undefined, []),
-    stateEngine,
+    new AutonomousPlanningService(new RecordingAutonomousPlanHistoryService(undefined, []), stateEngine),
   );
   const noCurrent = await noHistoryService.getCurrentPlanState();
   assert(noCurrent === undefined, "no cycle ever recorded -> getCurrentPlanState() is undefined, not a fabricated state");
@@ -370,16 +437,21 @@ async function verifyApplicationServiceIntegration(): Promise<void> {
   // returns an empty live plan -- a real, predictable value to compare
   // against the non-empty active plan p2, not a stub.
   const comparison = await applicationService.getLivePlanComparison();
-  assert(comparison.hasActivePlan === true, "getLivePlanComparison() reuses the real active entry via getLatestEntry()");
+  assert(comparison.hasActivePlan === true, "getLivePlanComparison() reuses the real active entry via AutonomousPlanningService.getPlanningStatus()");
   assert(comparison.matchesActivePlan === false, "an empty live plan does not match the non-empty active plan p2 -- the live view of the world has diverged from what was last recorded");
   assert(comparison.hypotheticalEvolution?.transitions.some((t) => t.changeType === "resolved") === true, "the hypothetical evolution correctly shows p2's item as resolved in the live plan, reusing AutonomousPlanEvolutionEngine's own classification");
 
-  assert(historyService.recordCalls === 0, "none of getAutonomousPlanStates()/getCurrentPlanState()/getLivePlanComparison() ever call IAutonomousPlanHistoryService.record()");
+  const snapshot = await applicationService.getAutonomousPlanningSnapshot();
+  assert(snapshot.currentState?.planId === "p2", "getAutonomousPlanningSnapshot() carries the current authoritative plan's state");
+  assert(snapshot.comparison.matchesActivePlan === false, "getAutonomousPlanningSnapshot()'s comparison matches getLivePlanComparison()'s own result for the same live/active pair");
+
+  assert(historyService.recordCalls === 0, "none of getAutonomousPlanStates()/getCurrentPlanState()/getLivePlanComparison()/getAutonomousPlanningSnapshot() ever call IAutonomousPlanHistoryService.record()");
 }
 
 async function main(): Promise<void> {
   verifyDeriveStates();
   verifyCompareToActive();
+  await verifyAutonomousPlanningService();
   await verifyApplicationServiceIntegration();
 }
 

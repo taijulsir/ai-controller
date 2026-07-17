@@ -23,6 +23,7 @@ import type { RepositorySnapshot } from "../src/intelligence/types";
 import type { IProjectMemoryService } from "../src/memory/interfaces";
 import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
+import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import type { IRecommendationEngine } from "../src/recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../src/recommendations/types";
@@ -371,6 +372,15 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
   const evolution1 = new AutonomousPlanEvolutionEngine().analyze(undefined, plan1, 1);
   const historyEntry: AutonomousPlanHistoryEntry = entry(1, plan1, evolution1);
   const fakeHistoryService = new ThrowingAutonomousPlanHistoryService(historyEntry, [historyEntry]);
+  // Phase 9.4: ApplicationService no longer holds fakeHistoryService directly —
+  // it goes through AutonomousPlanningService, the same façade production
+  // code uses. record() staying unreachable is now a property of the whole
+  // chain (ApplicationService -> AutonomousPlanningService -> the injected
+  // IAutonomousPlanHistoryService), not just of ApplicationService alone.
+  const autonomousPlanningService = new AutonomousPlanningService(
+    fakeHistoryService,
+    new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
+  );
 
   const applicationService: IApplicationService = new ApplicationService(
     new UnusedRepositoryIntelligenceService(),
@@ -386,19 +396,26 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new UnusedRuntimeControlService(),
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
-    fakeHistoryService,
-    new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
+    autonomousPlanningService,
   );
 
   const history = await applicationService.getAutonomousPlanHistory();
-  assert(history.length === 1 && history[0] === historyEntry, "getAutonomousPlanHistory() delegates verbatim to IAutonomousPlanHistoryService.getHistory()");
+  assert(history.length === 1 && history[0] === historyEntry, "getAutonomousPlanHistory() still returns exactly what IAutonomousPlanHistoryService.getHistory() produces, now routed through AutonomousPlanningService.getRecentCycles()");
   assert(fakeHistoryService.getHistoryCalls === 1, "getAutonomousPlanHistory() calls getHistory() exactly once, no double-fetch");
+  assert(fakeHistoryService.getLatestEntryCalls === 0, "getAutonomousPlanHistory() never touches getLatestEntry()");
 
+  // getLatestAutonomousPlanEvolution() now goes through
+  // AutonomousPlanningService.getRecentCycles(1) -- the same getHistory()
+  // call getAutonomousPlanHistory() uses, not a dedicated getLatestEntry()
+  // call, since the façade deliberately doesn't expose a one-for-one
+  // "getLatestEvolution" method of its own (see IAutonomousPlanningService's
+  // own doc comment).
   const evolution = await applicationService.getLatestAutonomousPlanEvolution();
   assert(evolution === historyEntry.evolution, "getLatestAutonomousPlanEvolution() returns exactly the evolution embedded in the latest recorded entry, never recomputed");
-  assert(fakeHistoryService.getLatestEntryCalls === 1, "getLatestAutonomousPlanEvolution() calls getLatestEntry() exactly once");
+  assert(fakeHistoryService.getHistoryCalls === 2, "getLatestAutonomousPlanEvolution() calls getHistory(1) once more, cumulative with the call above");
+  assert(fakeHistoryService.getLatestEntryCalls === 0, "getLatestAutonomousPlanEvolution() still never touches getLatestEntry() under the new implementation");
 
-  assert(fakeHistoryService.recordCalls === 0, "ApplicationService never calls IAutonomousPlanHistoryService.record() — recording is not its responsibility");
+  assert(fakeHistoryService.recordCalls === 0, "ApplicationService never calls IAutonomousPlanHistoryService.record(), whether directly or via AutonomousPlanningService — recording is not either class's responsibility");
 
   const emptyHistoryService = new ThrowingAutonomousPlanHistoryService(undefined, []);
   const applicationService2: IApplicationService = new ApplicationService(
@@ -415,8 +432,7 @@ async function verifyApplicationServiceIsReadOnly(): Promise<void> {
     new UnusedRuntimeControlService(),
     new UnusedRuntimeAdministrationService(),
     new AutonomousPlanningEngine(),
-    emptyHistoryService,
-    new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
+    new AutonomousPlanningService(emptyHistoryService, new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine())),
   );
   const noEvolution = await applicationService2.getLatestAutonomousPlanEvolution();
   assert(noEvolution === undefined, "no cycle ever recorded -> getLatestAutonomousPlanEvolution() is undefined, not a fabricated report");

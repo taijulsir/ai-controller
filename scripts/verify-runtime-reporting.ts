@@ -6,6 +6,7 @@ import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlan
 import type { IAutonomousPlanHistoryService } from "../src/planhistory/interfaces";
 import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
+import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeControlService } from "../src/control/interfaces";
@@ -401,8 +402,7 @@ async function main(): Promise<void> {
       new UnusedRuntimeControlService(),
       new UnusedRuntimeAdministrationService(),
       new AutonomousPlanningEngine(),
-      new UnusedAutonomousPlanHistoryService(),
-      new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()),
+      new AutonomousPlanningService(new UnusedAutonomousPlanHistoryService(), new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine())),
     );
 
     applicationService.getRuntimeReport();

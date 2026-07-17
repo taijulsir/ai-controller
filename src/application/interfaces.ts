@@ -7,6 +7,7 @@ import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
+import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
@@ -44,6 +45,10 @@ export interface IApplicationService {
   // currently active recorded one. Never records anything — a pure "what
   // if" query.
   getLivePlanComparison(): Promise<LivePlanComparison>;
+  // Phase 9.4: the composed view — live plan, current authoritative state,
+  // and the comparison between them, all describing the same instant.
+  // Never records anything.
+  getAutonomousPlanningSnapshot(): Promise<AutonomousPlanningSnapshot>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

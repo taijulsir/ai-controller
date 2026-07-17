@@ -18,6 +18,7 @@ import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor } from "./monitoring";
 import { TaskPlanner, WorkflowFactory } from "./planner";
 import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./planhistory";
+import { AutonomousPlanningService } from "./plan";
 import { AutonomousPlanStateEngine } from "./planstate";
 import { ExecutionPipeline } from "./pipeline";
 import { PlanningEngine } from "./planning";
@@ -123,6 +124,13 @@ async function bootstrap(): Promise<void> {
   // compareToActive() hypothetical-comparison method, rather than
   // constructing a second instance. No ordering constraint, no seam needed.
   const autonomousPlanStateEngine = new AutonomousPlanStateEngine(autonomousPlanEvolutionEngine);
+  // Phase 9.4: the consumer-facing façade over the recorded-planning domain
+  // (autonomousPlanHistoryService + autonomousPlanStateEngine, both already
+  // built above) — ApplicationService now depends on this one instance
+  // instead of the two collaborators it composes, individually, itself.
+  // Neither collaborator changed; this is purely a re-wiring. No ordering
+  // constraint, no seam needed: both of its dependencies already exist.
+  const autonomousPlanningService = new AutonomousPlanningService(autonomousPlanHistoryService, autonomousPlanStateEngine);
   // Phase 8.6: same ordering problem, same seam shape — RuntimeControlService
   // needs the real IBackgroundRuntime, which (via MonitoringWorker ->
   // ProactiveMonitor) needs this exact applicationService instance to exist
@@ -151,8 +159,7 @@ async function bootstrap(): Promise<void> {
     deferredRuntimeControlService,
     deferredRuntimeAdministrationService,
     autonomousPlanningEngine,
-    autonomousPlanHistoryService,
-    autonomousPlanStateEngine,
+    autonomousPlanningService,
   );
 
   // Background Runtime cluster (Phase 8.2, extended in Phase 8.3, gated by

@@ -13,9 +13,9 @@ import type { RepositorySnapshot } from "../intelligence/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { IProactiveMonitor } from "../monitoring/interfaces";
-import type { IAutonomousPlanHistoryService } from "../planhistory/interfaces";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
-import type { IAutonomousPlanStateEngine } from "../planstate/interfaces";
+import type { IAutonomousPlanningService } from "../plan/interfaces";
+import type { AutonomousPlanningSnapshot } from "../plan/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
@@ -71,20 +71,17 @@ export class ApplicationService implements IApplicationService {
     // seam needed, since it never reaches back toward ApplicationService or
     // anything else.
     private readonly autonomousPlanningEngine: IAutonomousPlanningEngine,
-    // Phase 9.2: a real dependency, unlike autonomousPlanningEngine above —
-    // AutonomousPlanHistoryService owns disk I/O and recording, but this
-    // class only ever calls its two read methods (getHistory/getLatestEntry).
-    // It never calls record(): recording, and the decision of when a
-    // planning cycle should be recorded, belong to AutonomousPlanHistoryService
-    // and a future runtime/scheduler phase respectively — not to
-    // ApplicationService, which stays a read-only facade here exactly as it
-    // is for every other query it exposes.
-    private readonly autonomousPlanHistoryService: IAutonomousPlanHistoryService,
-    // Phase 9.3: a real dependency, same shape as autonomousPlanHistoryService
-    // above — AutonomousPlanStateEngine derives plan state purely from
-    // history this class already fetches; it holds no state of its own and
-    // never reaches back toward ApplicationService.
-    private readonly autonomousPlanStateEngine: IAutonomousPlanStateEngine,
+    // Phase 9.4: replaces the two separate Phase 9.2/9.3 dependencies this
+    // class held directly before (AutonomousPlanHistoryService,
+    // AutonomousPlanStateEngine) with one façade over both. Neither
+    // AutonomousPlanHistoryService nor AutonomousPlanStateEngine changed —
+    // this class simply no longer wires them individually or re-implements
+    // their composition itself. AutonomousPlanningService never calls
+    // record(), even though it holds an IAutonomousPlanHistoryService
+    // reference that exposes it — recording, and when a planning cycle
+    // should be recorded, remain outside this class entirely, exactly as
+    // before.
+    private readonly autonomousPlanningService: IAutonomousPlanningService,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -227,59 +224,62 @@ export class ApplicationService implements IApplicationService {
     return this.autonomousPlanningEngine.buildPlan(reports);
   }
 
-  // Phase 9.2: pure delegation, no orchestration — AutonomousPlanHistoryService
-  // already assembles each AutonomousPlanHistoryEntry (plan + its evolution)
-  // at record time; this method exists only so future front-ends have one
-  // read-facade to depend on, matching every other query this class exposes.
+  // Phase 9.2 API, Phase 9.4 implementation: reuses
+  // autonomousPlanningService.getRecentCycles() (one history fetch) and
+  // extracts just the entries — still the exact same underlying
+  // IAutonomousPlanHistoryService.getHistory() call this method always made,
+  // just routed through the façade instead of holding that dependency
+  // directly.
   async getAutonomousPlanHistory(limit?: number): Promise<AutonomousPlanHistoryEntry[]> {
-    return this.autonomousPlanHistoryService.getHistory(limit);
+    const cycles = await this.autonomousPlanningService.getRecentCycles(limit);
+    return cycles.map((cycle) => cycle.entry);
   }
 
-  // Phase 9.2: pure delegation — the evolution for the most recently
-  // recorded cycle was computed once, at record time, and is read back
-  // verbatim here, never recomputed. undefined only when no cycle has ever
-  // been recorded yet (nothing in this phase records one).
+  // Phase 9.2 API, Phase 9.4 implementation: the most recent cycle's
+  // already-baked-in evolution, read via getRecentCycles(1) rather than a
+  // dedicated getLatestEntry() call — same data, one fewer method on the
+  // façade's own surface. undefined only when no cycle has ever been
+  // recorded yet.
   async getLatestAutonomousPlanEvolution(): Promise<AutonomousPlanEvolutionReport | undefined> {
-    const latestEntry = await this.autonomousPlanHistoryService.getLatestEntry();
-    return latestEntry?.evolution;
+    const [latest] = await this.autonomousPlanningService.getRecentCycles(1);
+    return latest?.entry.evolution;
   }
 
-  // Phase 9.3: fetch-once, then hand off — reuses getAutonomousPlanHistory()
-  // (itself already pure delegation) rather than calling
-  // autonomousPlanHistoryService.getHistory() a second, independent way.
-  // AutonomousPlanStateEngine.deriveStates() is a pure function of the
-  // history it's given; nothing here recomputes or stores anything.
+  // Phase 9.3 API, Phase 9.4 implementation: reuses the same
+  // getRecentCycles() fetch-once-and-derive as getAutonomousPlanHistory()
+  // above, extracting the derived state instead of the raw entry — entry
+  // and state for a given cycle always come from the same underlying fetch,
+  // never two independent reads that could disagree.
   async getAutonomousPlanStates(limit?: number): Promise<AutonomousPlanState[]> {
-    const history = await this.getAutonomousPlanHistory(limit);
-    return this.autonomousPlanStateEngine.deriveStates(history);
+    const cycles = await this.autonomousPlanningService.getRecentCycles(limit);
+    return cycles.map((cycle) => cycle.state);
   }
 
-  // Phase 9.3: the newest entry is active by definition — no need to derive
-  // the full states array just to answer "what's current right now."
-  // Delegates directly to getLatestEntry() and reuses
-  // AutonomousPlanStateEngine's own labeling for a single entry via
-  // deriveStates() on a one-element window, so "active" is computed in
-  // exactly one place, not duplicated here.
+  // Phase 9.3 API, Phase 9.4 implementation: pure delegation to the façade's
+  // own lightweight, single-entry-fetch method — no full cycle window is
+  // derived just to answer "what's current right now."
   async getCurrentPlanState(): Promise<AutonomousPlanState | undefined> {
-    const latestEntry = await this.autonomousPlanHistoryService.getLatestEntry();
-    if (!latestEntry) {
-      return undefined;
-    }
-    return this.autonomousPlanStateEngine.deriveStates([latestEntry])[0];
+    return this.autonomousPlanningService.getCurrentPlanState();
   }
 
-  // Phase 9.3: reuses the existing getAutonomousPlan() (Phase 9.1, live
-  // synthesis) and autonomousPlanHistoryService.getLatestEntry() (Phase
-  // 9.2), each fetched exactly once, then hands both to the pure
-  // AutonomousPlanStateEngine.compareToActive(). This never calls record() —
-  // the comparison is purely hypothetical, exactly as
-  // AutonomousPlanStateEngine's own contract guarantees.
+  // Phase 9.3 API, Phase 9.4 implementation: fetches the live plan (Phase
+  // 9.1, unchanged) exactly once, then reuses getAutonomousPlanningSnapshot()'s
+  // own underlying call for the comparison rather than a second, independent
+  // façade method.
   async getLivePlanComparison(): Promise<LivePlanComparison> {
-    const [livePlan, activeEntry] = await Promise.all([
-      this.getAutonomousPlan(),
-      this.autonomousPlanHistoryService.getLatestEntry(),
-    ]);
-    return this.autonomousPlanStateEngine.compareToActive(livePlan, activeEntry);
+    const livePlan = await this.getAutonomousPlan();
+    const snapshot = await this.autonomousPlanningService.getPlanningStatus(livePlan);
+    return snapshot.comparison;
+  }
+
+  // Phase 9.4: the composed view getLivePlanComparison() above already
+  // partially exposes — fetches the live plan once, hands it to
+  // autonomousPlanningService.getPlanningStatus(), which itself fetches the
+  // active entry exactly once and derives both currentState and comparison
+  // from that same fetch, so the two can never describe different instants.
+  async getAutonomousPlanningSnapshot(): Promise<AutonomousPlanningSnapshot> {
+    const livePlan = await this.getAutonomousPlan();
+    return this.autonomousPlanningService.getPlanningStatus(livePlan);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {
