@@ -9,6 +9,7 @@ import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
 import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
+import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
@@ -55,6 +56,11 @@ export interface IApplicationService {
   // AutonomousPlanningService owns fetching the window and invoking the
   // analysis engine; this class never re-derives it.
   getAutonomousPlanAnalysis(limit?: number): Promise<AutonomousPlanAnalysisReport>;
+  // Phase 9.6: purely descriptive readiness — confidence, currentness,
+  // observed multi-cycle indicators, and a derived level/score — never a
+  // review requirement, approval, or eligibility decision. The one place
+  // this class composes across the Planning and Readiness domains.
+  getAutonomousPlanReadiness(limit?: number): Promise<AutonomousPlanReadinessReport>;
   // Phase 8.5: synchronous, unlike the methods above — RuntimeStatusService
   // and everything it reads from are in-memory getters, no I/O anywhere in
   // the chain, so there is nothing to await.

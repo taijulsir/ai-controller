@@ -10,6 +10,7 @@ import type { AutonomousPlanHistoryEntry } from "../src/planhistory/types";
 import { AutonomousPlanStateEngine } from "../src/planstate/AutonomousPlanStateEngine";
 import { AutonomousPlanningService } from "../src/plan/AutonomousPlanningService";
 import { AutonomousPlanningAnalysisEngine } from "../src/plananalysis/AutonomousPlanningAnalysisEngine";
+import { AutonomousPlanReadinessEngine } from "../src/planreadiness/AutonomousPlanReadinessEngine";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
 import { AttentionDispatcher } from "../src/attention/AttentionDispatcher";
@@ -429,6 +430,7 @@ async function main(): Promise<void> {
       new UnusedRuntimeAdministrationService(),
       new AutonomousPlanningEngine(),
       new AutonomousPlanningService(new UnusedAutonomousPlanHistoryService(), new AutonomousPlanStateEngine(new AutonomousPlanEvolutionEngine()), new AutonomousPlanningAnalysisEngine()),
+    new AutonomousPlanReadinessEngine(),
     );
 
     let threw = false;

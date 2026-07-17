@@ -17,6 +17,8 @@ import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "
 import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { IAutonomousPlanningService } from "../plan/interfaces";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
+import type { IAutonomousPlanReadinessEngine } from "../planreadiness/interfaces";
+import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
@@ -83,6 +85,18 @@ export class ApplicationService implements IApplicationService {
     // should be recorded, remain outside this class entirely, exactly as
     // before.
     private readonly autonomousPlanningService: IAutonomousPlanningService,
+    // Phase 9.6: a new domain, not part of the Planning façade — see
+    // AutonomousPlanReadinessEngine's own doc comment for why it stays
+    // separate. Zero constructor dependencies of its own (a pure transform,
+    // same shape as autonomousPlanningEngine above) — no deferred seam
+    // needed. getAutonomousPlanReadiness() below is the one place this
+    // class performs legitimate cross-domain composition (Planning +
+    // Readiness), the same role it already plays for
+    // getEngineeringWorkspace() across the recommendations/assistance/
+    // memory/monitoring domains — not a regression of Phase 9.5's
+    // refinement, which was specifically about not re-deriving a use case
+    // that belongs inside a single domain's own façade.
+    private readonly readinessEngine: IAutonomousPlanReadinessEngine,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -290,6 +304,24 @@ export class ApplicationService implements IApplicationService {
   // than it holds one for the other four Autonomous Planning queries above.
   async getAutonomousPlanAnalysis(limit?: number): Promise<AutonomousPlanAnalysisReport> {
     return this.autonomousPlanningService.getAnalysis(limit);
+  }
+
+  // Phase 9.6: the one place the Planning domain and the Readiness domain
+  // meet. Fetches the live plan exactly once, then fetches the snapshot
+  // (which reuses that same live plan) and the analysis window concurrently
+  // — both are independent reads from AutonomousPlanningService's own
+  // fetch-once-internally methods, so there is nothing to further
+  // deduplicate here — and hands both results to the pure
+  // AutonomousPlanReadinessEngine. Never touches record(), never reaches
+  // ControllerCore/ExecutionPipeline/ApprovalEngine — there is no
+  // dependency here capable of any of that.
+  async getAutonomousPlanReadiness(limit?: number): Promise<AutonomousPlanReadinessReport> {
+    const livePlan = await this.getAutonomousPlan();
+    const [snapshot, analysis] = await Promise.all([
+      this.autonomousPlanningService.getPlanningStatus(livePlan),
+      this.autonomousPlanningService.getAnalysis(limit),
+    ]);
+    return this.readinessEngine.assess(snapshot, analysis);
   }
 
   private resolveRepositoryId(repositoryId?: string): string {
