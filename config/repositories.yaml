@@ -3,5 +3,9 @@ repositories:
     name: AI Controller
     path: /home/aiagent/workspace/ai-controller
     default_branch: main
+  test-ai-controller:
+    name: Test AI Controller
+    path: /home/aiagent/projects/test-ai-controller
+    default_branch: main
 
 active_repository: ai-controller

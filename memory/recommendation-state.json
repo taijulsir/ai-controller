@@ -1,0 +1,22 @@
+[
+  {
+    "repositoryId": "ai-controller",
+    "recommendationKind": "ReviewChanges",
+    "category": "blocking",
+    "priority": "critical",
+    "firstSeen": "2026-07-18T19:37:17.306Z",
+    "lastSeen": "2026-07-18T19:55:47.532Z",
+    "urgentDelivered": true,
+    "sustainedDelivered": false
+  },
+  {
+    "repositoryId": "ai-controller",
+    "recommendationKind": "RepositoryReadyToShip",
+    "category": "advisory",
+    "priority": "medium",
+    "firstSeen": "2026-07-18T19:37:17.306Z",
+    "lastSeen": "2026-07-18T19:55:47.532Z",
+    "urgentDelivered": false,
+    "sustainedDelivered": false
+  }
+]

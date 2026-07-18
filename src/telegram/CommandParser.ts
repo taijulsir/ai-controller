@@ -41,17 +41,37 @@ export class CommandParser implements ICommandParser {
 
   parse(text: string): ParsedCommand {
     const withoutSlash = text.trim().replace(/^\//, "");
+    const tokens = withoutSlash.split(/\s+/).filter((token) => token.length > 0);
 
+    // repo=<id> is recognized only in two fixed positions: immediately
+    // before the command name (token 0), or immediately after it (the token
+    // right after the command name). This parser never looks past position
+    // two for one -- a repo=<id>-shaped token appearing later is left
+    // completely alone, so it stays as ordinary argument/description text
+    // (e.g. "/implement Add support for repo=test query parameter" must
+    // reach Claude unchanged).
+    const REPO_TOKEN = /^repo=(\S+)$/;
     let repositoryId: string | undefined;
-    let rest = withoutSlash;
-    const repoMatch = rest.match(/^repo=(\S+)\s*/);
-    if (repoMatch) {
-      repositoryId = repoMatch[1];
-      rest = rest.slice(repoMatch[0].length);
+    let commandName: string | undefined;
+    let remainingTokens: string[];
+
+    const leadingRepoMatch = tokens[0]?.match(REPO_TOKEN);
+    if (leadingRepoMatch) {
+      repositoryId = leadingRepoMatch[1];
+      commandName = tokens[1];
+      remainingTokens = tokens.slice(2);
+    } else {
+      commandName = tokens[0];
+      const trailingRepoMatch = tokens[1]?.match(REPO_TOKEN);
+      if (trailingRepoMatch) {
+        repositoryId = trailingRepoMatch[1];
+        remainingTokens = tokens.slice(2);
+      } else {
+        remainingTokens = tokens.slice(1);
+      }
     }
 
-    const [commandName, ...argWords] = rest.split(/\s+/);
-    const args = argWords.join(" ");
+    const args = remainingTokens.join(" ");
     const normalizedCommand = commandName?.toLowerCase();
 
     if (normalizedCommand === "ship") {

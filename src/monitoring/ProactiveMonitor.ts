@@ -28,7 +28,7 @@ export class ProactiveMonitor implements IProactiveMonitor {
 
   async evaluate(repositoryId?: string): Promise<AttentionEvent[]> {
     const report = await this.applicationService.getRecommendations(repositoryId);
-    const transitions = this.stateStore.reconcile(report.repositoryId, report.recommendations, this.policy);
+    const transitions = await this.stateStore.reconcile(report.repositoryId, report.recommendations, this.policy);
 
     return transitions.map(({ state, trigger }) => ({
       repositoryId: state.repositoryId,

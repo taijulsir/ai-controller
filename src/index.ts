@@ -15,7 +15,7 @@ import { DecisionEngine } from "./decisions";
 import { RuntimeDiagnosticsEngine } from "./diagnostics";
 import { RepositoryIntelligenceService } from "./intelligence";
 import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
-import { ProactiveMonitor } from "./monitoring";
+import { ProactiveMonitor, RecommendationStateStore } from "./monitoring";
 import { TaskPlanner, WorkflowFactory } from "./planner";
 import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./planhistory";
 import { AutonomousPlanningAnalysisEngine } from "./plananalysis";
@@ -395,7 +395,16 @@ async function bootstrap(): Promise<void> {
   // interprets the value itself — it is an opaque string, exactly like
   // PipelineRequest.correlationId already is everywhere else in this stack.
   const runtimePolicyEngine = new RuntimePolicyEngine();
-  const proactiveMonitor = new ProactiveMonitor(applicationService);
+  // Explicitly constructed (rather than left to ProactiveMonitor's own
+  // default parameter) so configService can be passed through, giving this
+  // store restart-durable delivery tracking — see RecommendationStateStore's
+  // own doc comment. restore() is awaited below, before backgroundRuntime
+  // (and therefore MonitoringWorker's first tick) starts, so a still-active
+  // recommendation from a prior process lifetime is never re-announced as
+  // new just because the process restarted.
+  const recommendationStateStore = new RecommendationStateStore(undefined, configService);
+  await recommendationStateStore.restore();
+  const proactiveMonitor = new ProactiveMonitor(applicationService, undefined, recommendationStateStore);
   const attentionDispatcher = new AttentionDispatcher(runtimePolicyEngine);
   const monitoringWorker = new MonitoringWorker(
     proactiveMonitor,
