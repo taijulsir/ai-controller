@@ -9,7 +9,13 @@
   "scripts": {
   "dev": "tsx watch src/index.ts",
   "start": "node dist/index.js",
-  "build": "tsc"
+  "start:checked": "bash scripts/start.sh",
+  "build": "tsc",
+  "health-check": "tsx scripts/health-check.ts",
+  "backup-memory": "bash scripts/backup-memory.sh",
+  "pm2:start": "pm2 start ecosystem.config.js",
+  "pm2:stop": "pm2 stop ai-controller",
+  "pm2:logs": "pm2 logs ai-controller"
   },
   "keywords": [],
   "author": "",

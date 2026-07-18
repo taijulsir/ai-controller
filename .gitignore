@@ -3,4 +3,6 @@ dist/
 logs/*.log
 *.log
 memory/*.jsonl
+memory/health.json
+backups/
 .env

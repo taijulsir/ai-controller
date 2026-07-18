@@ -34,8 +34,9 @@ import { RuntimePolicyEngine } from "./policy";
 import { RecommendationEngine } from "./recommendations";
 import { RepositoryRegistry } from "./repositories";
 import { RuntimeReportingEngine } from "./reporting";
-import { AutonomousExecutionWorker, AutonomousPlanRecordingWorker, BackgroundRuntime, MonitoringWorker } from "./runtime";
+import { AutonomousExecutionWorker, AutonomousPlanRecordingWorker, BackgroundRuntime, HealthCheckWorker, MonitoringWorker } from "./runtime";
 import { ClaudeSessionManager } from "./session";
+import { EnvironmentValidator } from "./startup";
 import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
 import {
@@ -61,6 +62,19 @@ async function bootstrap(): Promise<void> {
   loadEnvFile();
 
   const configService = new ConfigService();
+
+  // Stage 4 (operational hardening): a pure, advisory prerequisite check —
+  // every issue it can report is a warning, never fatal, and it never
+  // changes what happens next. Run once, here, before anything else is
+  // built, so a missing CLI or an unwritable memory directory is visible in
+  // the very first lines of startup output instead of surfacing later as a
+  // confusing failure deep inside a specific workflow.
+  const environmentValidator = new EnvironmentValidator(configService);
+  const environmentReport = await environmentValidator.validate();
+  for (const issue of environmentReport.issues) {
+    console.warn(`environment-validator: [${issue.check}] ${issue.message}`);
+  }
+
   const repositoryRegistry = new RepositoryRegistry(configService);
 
   // Repository Intelligence / Project Memory / Session Manager / Decision Engine
@@ -397,7 +411,18 @@ async function bootstrap(): Promise<void> {
     undefined,
     operatorCorrelationId,
   );
-  const backgroundRuntime = new BackgroundRuntime([monitoringWorker, autonomousPlanRecordingWorker, autonomousExecutionWorker]);
+  // Stage 4 (operational hardening): a liveness heartbeat, not a business
+  // capability — see HealthCheckWorker's own doc comment. Depends only on
+  // configService, so it carries none of the "no dependency capable of X"
+  // constraints the other three workers document; it has no dependency
+  // capable of anything execution-related in the first place.
+  const healthCheckWorker = new HealthCheckWorker(configService);
+  const backgroundRuntime = new BackgroundRuntime([
+    monitoringWorker,
+    autonomousPlanRecordingWorker,
+    autonomousExecutionWorker,
+    healthCheckWorker,
+  ]);
   backgroundRuntime.start();
 
   // Phase 8.5: the real RuntimeStatusService can only be built now that
@@ -451,12 +476,50 @@ async function bootstrap(): Promise<void> {
   // depend on this either way (see below).
   let poller: TelegramLongPoller | undefined;
 
-  const shutdown = (): void => {
+  // Stage 4 (operational hardening): poller.stop()/backgroundRuntime.stop()
+  // are unchanged and still run first, exactly as before — this only adds a
+  // bounded upper bound on top of them. Without it, a pending Telegram
+  // approval (TelegramApprovalProvider's own un-unref'd timeout, up to
+  // APPROVAL_TIMEOUT_MINUTES) or an in-flight Claude call
+  // (ClaudeAdapter's own un-unref'd execution timeout, up to
+  // ClaudeConfig.execution.max_execution_minutes) can each independently
+  // keep the process alive for several more minutes after both stop() calls
+  // above have already returned, since neither of those timers is touched by
+  // shutdown() and Node won't exit while a ref'd timer is still pending. A
+  // process supervisor's own SIGKILL grace period would eventually end this
+  // anyway (uncontrolled); this makes the same outcome controlled, logged,
+  // and bounded by this process's own clock instead. GRACEFUL_SHUTDOWN_TIMEOUT_MS
+  // is intentionally shorter than typical supervisor SIGKILL grace periods
+  // (Docker/PM2 commonly default around 10s+, Kubernetes 30s) so this always
+  // gets a chance to log before anything more forceful happens — see
+  // ecosystem.config.js's kill_timeout, which must stay comfortably above
+  // this value.
+  //
+  // unref()'d deliberately: in the common case (nothing pending), the
+  // process still exits immediately once poller.stop()/backgroundRuntime.stop()
+  // finish and the event loop naturally drains — this timer never adds delay
+  // to a clean shutdown, it only fires if something else is genuinely still
+  // keeping the process alive when its time comes.
+  const GRACEFUL_SHUTDOWN_TIMEOUT_MS = Number(process.env.SHUTDOWN_TIMEOUT_MS) || 10_000;
+  let shuttingDown = false;
+  const shutdown = (signal: string): void => {
+    if (shuttingDown) {
+      return;
+    }
+    shuttingDown = true;
+    console.log(`${signal} received — shutting down (up to ${GRACEFUL_SHUTDOWN_TIMEOUT_MS}ms grace period)...`);
     poller?.stop();
     backgroundRuntime.stop();
+    const forceExitTimer = setTimeout(() => {
+      console.error(
+        `Graceful shutdown did not complete within ${GRACEFUL_SHUTDOWN_TIMEOUT_MS}ms (a pending Telegram approval or an in-flight Claude call is the likely cause) — forcing exit.`,
+      );
+      process.exit(1);
+    }, GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+    forceExitTimer.unref();
   };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 
   // telegramClient and telegramSecurity were already constructed above
   // (Phase 15), before the Background Runtime cluster -- reused here rather
