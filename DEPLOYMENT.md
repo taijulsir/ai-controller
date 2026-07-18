@@ -242,3 +242,9 @@ covered by `scripts/backup-memory.sh`, which only touches `memory.directory`.
 
 See [RELEASE.md](./RELEASE.md) for how a release is currently validated by hand in the
 absence of CI.
+
+See [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) for the step-by-step deploy/verify
+checklist this document's guidance was distilled into, [DISASTER_RECOVERY.md](./DISASTER_RECOVERY.md)
+for a scenario-driven incident runbook built on the [Recovery procedures](#recovery-procedures)
+above, and [PRODUCTION_READY.md](./PRODUCTION_READY.md) for the verification evidence gathered
+against a real running instance during Stage 6.

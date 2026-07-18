@@ -24,6 +24,9 @@ development.
 | [CONFIGURATION.md](./CONFIGURATION.md) | Every `config/*.yaml` field, validation rules, env var interpolation |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Setup, npm scripts, running the verification suite, coding conventions |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Running in production, PM2/systemd supervision, health checks, backup & recovery |
+| [PRODUCTION_CHECKLIST.md](./PRODUCTION_CHECKLIST.md) | Step-by-step deploy/verify checklist (Stage 6) |
+| [DISASTER_RECOVERY.md](./DISASTER_RECOVERY.md) | Scenario-driven incident recovery runbook (Stage 6) |
+| [PRODUCTION_READY.md](./PRODUCTION_READY.md) | Stage 6 production-readiness verification report |
 | [RELEASE.md](./RELEASE.md) | The release checklist and tagging convention used to reach v1.0.0 |
 | [CHANGELOG.md](./CHANGELOG.md) | Full phase-by-phase development history |
 

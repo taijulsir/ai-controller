@@ -7,15 +7,15 @@
     "doc": "docs"
   },
   "scripts": {
-  "dev": "tsx watch src/index.ts",
-  "start": "node dist/index.js",
-  "start:checked": "bash scripts/start.sh",
-  "build": "tsc",
-  "health-check": "tsx scripts/health-check.ts",
-  "backup-memory": "bash scripts/backup-memory.sh",
-  "pm2:start": "pm2 start ecosystem.config.js",
-  "pm2:stop": "pm2 stop ai-controller",
-  "pm2:logs": "pm2 logs ai-controller"
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "start:checked": "bash scripts/start.sh",
+    "build": "tsc",
+    "health-check": "tsx scripts/health-check.ts",
+    "backup-memory": "bash scripts/backup-memory.sh",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop ai-controller",
+    "pm2:logs": "pm2 logs ai-controller"
   },
   "keywords": [],
   "author": "",
@@ -23,6 +23,7 @@
   "type": "commonjs",
   "devDependencies": {
     "@types/node": "^26.1.1",
+    "pm2": "^7.0.3",
     "tsx": "^4.23.1",
     "typescript": "^7.0.2"
   },
