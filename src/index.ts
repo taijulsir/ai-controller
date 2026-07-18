@@ -458,23 +458,26 @@ async function bootstrap(): Promise<void> {
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
-  // telegramConfig was already fetched above (Phase 14), before the
-  // Background Runtime cluster -- reused here rather than fetched a second
-  // time.
-  if (!telegramConfig.telegram.enabled) {
-    controllerEntryPoint.bind(new MemoryRecordingControllerCore(plainControllerCore, projectMemory));
-    console.log("Telegram transport disabled (telegram.enabled = false in config/telegram.yaml).");
-    return;
-  }
-
   // telegramClient and telegramSecurity were already constructed above
   // (Phase 15), before the Background Runtime cluster -- reused here rather
   // than built a second time.
-  // Registers this exact same attentionDispatcher (built above, before this
-  // branch was known to be reached) with its one Telegram-specific transport
-  // — the only place in this file where the attention-delivery cluster and
-  // Telegram meet. AttentionDispatcher itself is unaware this happened.
-  attentionDispatcher.addTransport(new TelegramAttentionTransport(telegramClient, configService));
+  //
+  // telegramApprovalProvider/approvalControllerCore/controllerCore are built
+  // and bound to controllerEntryPoint unconditionally, before the
+  // telegram.enabled check below — not only inside the (formerly
+  // Telegram-only) branch that used to build them. BackgroundRuntime's
+  // AutonomousExecutionWorker (started above, before this point) reaches
+  // ControllerCore through this exact same controllerEntryPoint seam and
+  // runs whether or not Telegram itself is enabled (see the Background
+  // Runtime cluster comment above) — so the approval gate configured in
+  // ControllerConfig.approval (e.g. require_before_git_push) must be in
+  // effect on this seam unconditionally too, or a mutating action taken
+  // while Telegram is disabled would bypass it entirely. This does not
+  // require a live long-poller to be safe: TelegramApprovalProvider already
+  // fails closed on its own — immediately, if the request's correlationId
+  // isn't Telegram-shaped (the case whenever operator_chat_id isn't
+  // configured, exactly as AutonomousExecutionWorker's own doc comment
+  // describes), or after its own timeout otherwise.
   const telegramApprovalProvider = new TelegramApprovalProvider(telegramClient, telegramSecurity);
   const approvalControllerCore = new ApprovalEngine(plainControllerCore, configService, telegramApprovalProvider);
   // Recording wraps the outermost layer (above approval) so every execution
@@ -485,6 +488,22 @@ async function bootstrap(): Promise<void> {
   // itself (Phase 6.2), so it can never affect the real result below.
   const controllerCore = new MemoryRecordingControllerCore(approvalControllerCore, projectMemory);
   controllerEntryPoint.bind(controllerCore);
+
+  // telegramConfig was already fetched above (Phase 14), before the
+  // Background Runtime cluster -- reused here rather than fetched a second
+  // time. Telegram being disabled only means the long-polling transport and
+  // its adapter never start — it no longer implies an unapproved
+  // ControllerCore, which is why the binding above happens unconditionally.
+  if (!telegramConfig.telegram.enabled) {
+    console.log("Telegram transport disabled (telegram.enabled = false in config/telegram.yaml).");
+    return;
+  }
+
+  // Registers this exact same attentionDispatcher (built above, before this
+  // branch was known to be reached) with its one Telegram-specific transport
+  // — the only place in this file where the attention-delivery cluster and
+  // Telegram meet. AttentionDispatcher itself is unaware this happened.
+  attentionDispatcher.addTransport(new TelegramAttentionTransport(telegramClient, configService));
 
   // ExecutionPipeline is now the single runtime entrypoint Telegram submits
   // engineering task execution requests to (Phase 7.5) — it was built above

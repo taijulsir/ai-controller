@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { ApplicationService } from "../src/application/ApplicationService";
+import type { IAutonomousExecutionOrchestrator } from "../src/autonomousexecution/interfaces";
 import { RecommendationEngine } from "../src/recommendations/RecommendationEngine";
 import { EngineeringAssistanceEngine } from "../src/assistance/EngineeringAssistanceEngine";
 import { ApprovalEngine } from "../src/approval/ApprovalEngine";
@@ -50,6 +51,7 @@ import { FixBugWorkflow } from "../src/planner/workflows/FixBugWorkflow";
 import { ListPullRequestsWorkflow } from "../src/planner/workflows/ListPullRequestsWorkflow";
 import { PlanningEngine } from "../src/planning/PlanningEngine";
 import { ExecutionPipeline } from "../src/pipeline/ExecutionPipeline";
+import type { PipelineResult } from "../src/pipeline/types";
 import { WorkflowOrchestrator } from "../src/orchestration/WorkflowOrchestrator";
 import { WorkflowRegistry } from "../src/orchestration/WorkflowRegistry";
 import { RepositoryRegistry } from "../src/repositories/RepositoryRegistry";
@@ -219,6 +221,17 @@ class RecordingApprovalProvider implements IApprovalProvider {
   }
 }
 
+// This test never sends an "/auto-execute" command — it only exercises the
+// existing task/workflow path (Phase 7.5) — so TelegramAdapter's Phase 12
+// autonomousExecutionOrchestrator dependency is never actually invoked here.
+// Same "Unused*" placeholder precedent as
+// verify-telegram-autonomous-execution-trigger.ts's UnusedExecutionPipeline.
+class UnusedAutonomousExecutionOrchestrator implements IAutonomousExecutionOrchestrator {
+  async attemptExecution(): Promise<PipelineResult | undefined> {
+    throw new Error("not used -- this test never sends an autonomous-execute command");
+  }
+}
+
 let update = 0;
 function makeUpdate(chatId: number, text: string): TelegramUpdate {
   update += 1;
@@ -286,6 +299,7 @@ async function main(): Promise<void> {
       applicationService,
       new AllowAllTelegramSecurity(),
       telegramClient,
+      new UnusedAutonomousExecutionOrchestrator(),
       new CommandParser(),
       new ResponseFormatter(),
     );
