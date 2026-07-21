@@ -5,7 +5,7 @@
     "category": "blocking",
     "priority": "critical",
     "firstSeen": "2026-07-18T20:25:47.581Z",
-    "lastSeen": "2026-07-21T16:40:56.073Z",
+    "lastSeen": "2026-07-21T18:10:55.169Z",
     "urgentDelivered": true,
     "sustainedDelivered": true
   },
@@ -15,7 +15,7 @@
     "category": "advisory",
     "priority": "medium",
     "firstSeen": "2026-07-18T20:25:47.581Z",
-    "lastSeen": "2026-07-21T16:40:56.073Z",
+    "lastSeen": "2026-07-21T18:10:55.169Z",
     "urgentDelivered": false,
     "sustainedDelivered": true
   },
@@ -25,7 +25,7 @@
     "category": "advisory",
     "priority": "high",
     "firstSeen": "2026-07-19T11:55:48.530Z",
-    "lastSeen": "2026-07-21T16:40:57.513Z",
+    "lastSeen": "2026-07-21T18:10:55.796Z",
     "urgentDelivered": true,
     "sustainedDelivered": true
   }
