@@ -31,7 +31,7 @@ import type { Repository } from "../src/domain/repository/Repository";
 import { GitAdapter } from "../src/git/GitAdapter";
 import type { IClaudeAdapter } from "../src/claude/interfaces";
 import type { ClaudeExecuteOptions } from "../src/claude/interfaces";
-import type { ClaudeExecutionResult, ClaudeRunState } from "../src/claude/types";
+import type { ClaudeExecutionResult } from "../src/claude/types";
 import type { IGithubAdapter } from "../src/github/interfaces";
 import type { CreatePullRequestOptions, PullRequestSummary } from "../src/github/types";
 import { RepositoryIntelligenceService } from "../src/intelligence/RepositoryIntelligenceService";
@@ -39,6 +39,8 @@ import { MemoryRecordingControllerCore } from "../src/memory/MemoryRecordingCont
 import { ProjectMemoryService } from "../src/memory/ProjectMemoryService";
 import type { ITaskWorkflow, IWorkflowFactory } from "../src/planner/interfaces";
 import { TaskPlanner } from "../src/planner/TaskPlanner";
+import { UndoCheckpointRecorder } from "../src/planner/UndoCheckpointRecorder";
+import { UndoableTaskPolicy } from "../src/planner/UndoableTaskPolicy";
 import type { Task, TaskExecutionContext } from "../src/planner/types";
 import { CreateCommitWorkflow } from "../src/planner/workflows/CreateCommitWorkflow";
 import { CreatePullRequestWorkflow } from "../src/planner/workflows/CreatePullRequestWorkflow";
@@ -81,13 +83,6 @@ class FakeClaudeAdapter implements IClaudeAdapter {
     return { output: this.outputFor(prompt), exitCode: 0 };
   }
   async *stream(): AsyncIterable<string> {}
-  async stopSession(): Promise<void> {}
-  getStatus(): ClaudeRunState {
-    return { status: "idle", lastExitCode: null };
-  }
-  isRunning(): boolean {
-    return false;
-  }
 }
 
 class FakeGithubAdapter implements IGithubAdapter {
@@ -280,7 +275,7 @@ async function main(): Promise<void> {
     const workflowFactory = new TestWorkflowFactory(repositoryRegistry, sessionManager, (prompt) =>
       prompt.includes("Analyze") ? "This repo has one README." : "Implemented.",
     );
-    const taskPlanner = new TaskPlanner(configService, workflowFactory);
+    const taskPlanner = new TaskPlanner(configService, workflowFactory, new UndoCheckpointRecorder(repositoryRegistry), new UndoableTaskPolicy());
 
     const controllerEntryPoint = new DeferredControllerCore();
     const workflowRegistry = new WorkflowRegistry();
@@ -300,6 +295,7 @@ async function main(): Promise<void> {
       new AllowAllTelegramSecurity(),
       telegramClient,
       new UnusedAutonomousExecutionOrchestrator(),
+      repositoryRegistry,
       new CommandParser(),
       new ResponseFormatter(),
     );
@@ -311,7 +307,7 @@ async function main(): Promise<void> {
     assert(workflowFactory.claudeAdapter.calls.length === 1, "analyze: Claude was called exactly once");
     assert(workflowFactory.claudeAdapter.calls[0].prompt.includes("Analyze"), "analyze: the real analyze-repository prompt was sent, not a substitute verify-git-status");
     const analyzeReply = telegramClient.sent[telegramClient.sent.length - 1].text;
-    assert(analyzeReply.includes("Recommended action: AnalyzeFirst"), "analyze: response surfaces the Strategy recommendation (Strategy executed)");
+    assert(analyzeReply.includes("Plan:</b> Analyzing the repository first"), "analyze: response surfaces the Strategy recommendation (Strategy executed)");
     assert(analyzeReply.includes("This repo has one README."), "analyze: response surfaces the real Claude output");
 
     // --- Test 2: /implement -> fresh repo, no session, on default branch -> blocked (adjustment 3), Claude never called ---
@@ -323,7 +319,7 @@ async function main(): Promise<void> {
     const claudeCallsBeforeImplement = workflowFactory.claudeAdapter.calls.length;
     await telegramAdapter.handleUpdate(makeUpdate(CHAT, "/implement add a login page"));
     const implementReply = telegramClient.sent[telegramClient.sent.length - 1].text;
-    assert(implementReply.includes("Recommended action: CreateFeatureBranch"), "implement-feature: Strategy correctly recommends CreateFeatureBranch (Strategy+Planning+Coordination executed)");
+    assert(implementReply.includes("Plan:</b> Creating a feature branch first"), "implement-feature: Strategy correctly recommends CreateFeatureBranch (Strategy+Planning+Coordination executed)");
     assert(implementReply.includes("⛔") && implementReply.toLowerCase().includes("branch"), "implement-feature: blocked outcome with explanation is surfaced to the user, not silence");
     assert(workflowFactory.claudeAdapter.calls.length === claudeCallsBeforeImplement, "implement-feature: Claude never called while blocked — no duplicate/incorrect execution");
 
@@ -339,7 +335,7 @@ async function main(): Promise<void> {
     // --- Test 4: /fix -> same repo, active session from Test 3 -> ContinueCurrentTask, session continued ---
     await telegramAdapter.handleUpdate(makeUpdate(CHAT, "/fix null pointer on submit"));
     const fixReply = telegramClient.sent[telegramClient.sent.length - 1].text;
-    assert(fixReply.includes("Recommended action: ContinueCurrentTask"), "fix-bug: active session -> ContinueCurrentTask");
+    assert(fixReply.includes("Plan:</b> Continuing the current work"), "fix-bug: active session -> ContinueCurrentTask");
     assert(workflowFactory.claudeAdapter.calls[workflowFactory.claudeAdapter.calls.length - 1].continue === true, "Claude session reuse: fix-bug's Claude call passes continue: true, reusing the session implement-feature established");
 
     // --- Test 5: /ship -> kind: "pipeline" -> full stack -> ShipChanges -> real git commit, approval on push, fake gh for the PR ---
@@ -351,7 +347,7 @@ async function main(): Promise<void> {
     const memoryEventsBeforeShip = readMemoryEventCount(memoryDir);
     await telegramAdapter.handleUpdate(makeUpdate(CHAT, "/ship Add login page"));
     const shipReply = telegramClient.sent[telegramClient.sent.length - 1].text;
-    assert(shipReply.includes("Recommended action: ShipChanges"), "ship: Strategy correctly recommends ShipChanges (Strategy+Planning+Coordination executed for /ship)");
+    assert(shipReply.includes("Plan:</b> Shipping the changes"), "ship: Strategy correctly recommends ShipChanges (Strategy+Planning+Coordination executed for /ship)");
     const log = git(repoPath, "log", "--oneline", "-n", "3");
     assert(log.includes("Add login page"), "ship: a real git commit was created with the message from /ship — ControllerCore actually executed the workflow, not a simulation");
     assert(approvalProvider.requests.length === 1 && approvalProvider.requests[0].task.type === "push-changes", "ship: ApprovalEngine was actually consulted before the push-changes step, exactly as configured (require_before_git_push: true) — approval still occurs where configured");

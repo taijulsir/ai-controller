@@ -1,5 +1,6 @@
 import { ApplicationService } from "../src/application/ApplicationService";
 import type { IRuntimeAdministrationService } from "../src/admin/interfaces";
+import type { IApprovalCanceller, IApprovalPendingReader } from "../src/approval/interfaces";
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import { AutonomousPlanningEngine } from "../src/autonomy/AutonomousPlanningEngine";
 import { AutonomousPlanEvolutionEngine } from "../src/planhistory/AutonomousPlanEvolutionEngine";
@@ -18,6 +19,8 @@ import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IRuntimeControlService } from "../src/control/interfaces";
 import type { IDecisionEngine } from "../src/decisions/interfaces";
 import type { RepositoryInsightReport } from "../src/decisions/types";
+import type { IExecutionStateReader } from "../src/executionstate/interfaces";
+import type { CurrentTaskSnapshot } from "../src/executionstate/types";
 import type { IRepositoryIntelligenceService } from "../src/intelligence/interfaces";
 import type { RepositorySnapshot } from "../src/intelligence/types";
 import type { IProjectMemoryService } from "../src/memory/interfaces";
@@ -25,6 +28,7 @@ import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { IProactiveMonitor } from "../src/monitoring/interfaces";
 import type { AttentionEvent } from "../src/monitoring/types";
 import type { RuntimePolicyStatus } from "../src/policy/types";
+import type { ITaskCancellationPolicy, ITaskCanceller } from "../src/planner/interfaces";
 import type { IRecommendationEngine } from "../src/recommendations/interfaces";
 import type { Recommendation, RepositoryRecommendationReport } from "../src/recommendations/types";
 import type { IRepositoryRegistry } from "../src/repositories/interfaces";
@@ -33,6 +37,8 @@ import type { IClaudeSessionManager } from "../src/session/interfaces";
 import type { ClaudeSessionDecision, ClaudeSessionInfo } from "../src/session/types";
 import type { IRuntimeStatusService } from "../src/status/interfaces";
 import type { RuntimeStatus } from "../src/status/types";
+import type { IUndoService } from "../src/undo/interfaces";
+import type { UndoOutcome, UndoPlan } from "../src/undo/types";
 
 function baseSnapshot(): RepositorySnapshot {
   return {
@@ -105,9 +111,11 @@ class FakeSessionManager implements IClaudeSessionManager {
     throw new Error("not used");
   }
   resetSession(): void {}
-  expireSession(): void {}
   getSessionStatus(): ClaudeSessionInfo | undefined {
     return { id: "s1", repositoryId: "alpha", status: "active", createdAt: new Date(), lastUsedAt: new Date() };
+  }
+  getIdleTimeoutMinutes(): number {
+    throw new Error("not used");
   }
 }
 
@@ -194,6 +202,45 @@ class UnusedAutonomousPlanHistoryService implements IAutonomousPlanHistoryServic
   }
 }
 
+// Phase A/A.2/B (Task Management, Cancellation, Undo): six more
+// throw-stub collaborators, same reasoning as the three Unused* runtime ones
+// above -- this script only exercises getEngineeringWorkspace(), which never
+// touches execution-state, approval-cancellation, task-cancellation, or undo
+// at all. Exist only so ApplicationService's constructor is satisfied.
+class UnusedExecutionStateReader implements IExecutionStateReader {
+  getCurrent(): CurrentTaskSnapshot | undefined {
+    throw new Error("not used");
+  }
+}
+class UnusedApprovalPendingReader implements IApprovalPendingReader {
+  isPending(): boolean {
+    throw new Error("not used");
+  }
+}
+class UnusedTaskCanceller implements ITaskCanceller {
+  cancel(): boolean {
+    throw new Error("not used");
+  }
+}
+class UnusedApprovalCanceller implements IApprovalCanceller {
+  reject(): boolean {
+    throw new Error("not used");
+  }
+}
+class UnusedTaskCancellationPolicy implements ITaskCancellationPolicy {
+  canCancel(): boolean {
+    throw new Error("not used");
+  }
+}
+class UnusedUndoService implements IUndoService {
+  async buildUndoPlan(): Promise<UndoPlan> {
+    throw new Error("not used");
+  }
+  async executeUndoPlan(): Promise<UndoOutcome> {
+    throw new Error("not used");
+  }
+}
+
 function assert(condition: boolean, message: string): void {
   console.log(`${condition ? "PASS" : "FAIL"} - ${message}`);
 }
@@ -225,6 +272,12 @@ function buildService(monitor?: FakeProactiveMonitor) {
     new AutonomousPlanSequencingEngine(),
     new AutonomousPlanSchedulingEngine(),
     new AutonomousPlanRecordingService(new UnusedAutonomousPlanHistoryService()),
+    new UnusedExecutionStateReader(),
+    new UnusedApprovalPendingReader(),
+    new UnusedTaskCanceller(),
+    new UnusedApprovalCanceller(),
+    new UnusedTaskCancellationPolicy(),
+    new UnusedUndoService(),
     monitor,
   );
   return { service, repositoryIntelligence, projectMemory, decisionEngine, recommendationEngine, engineeringAssistanceEngine };

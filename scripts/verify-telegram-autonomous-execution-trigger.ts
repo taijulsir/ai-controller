@@ -155,7 +155,7 @@ async function verifyTelegramAdapterRouting(): Promise<void> {
     await adapter.handleUpdate({ updateId, message: { chatId, userId, text: "/auto-execute" } });
 
     assert(orchestrator.calls.length === 0, "an unauthorized user's \"/auto-execute\" never reaches the orchestrator");
-    assert(telegramClient.sentMessages[0]?.text === "You are not authorized to use this bot.", "the standard authorization rejection message is sent, same as every other command");
+    assert(telegramClient.sentMessages[0]?.text === "🚫 You are not authorized to use this bot.", "the standard authorization rejection message is sent, same as every other command");
   }
 
   // A failure inside attemptExecution() is caught and reported, same shape
@@ -176,7 +176,7 @@ async function verifyTelegramAdapterRouting(): Promise<void> {
     );
 
     await adapter.handleUpdate({ updateId, message: { chatId, userId, text: "/auto-execute" } });
-    assert(telegramClient.sentMessages[0]?.text === "Something went wrong: boom", "a thrown error is caught and reported, exactly like the existing task/workflow path");
+    assert(telegramClient.sentMessages[0]?.text === "⚠️ Something went wrong: boom", "a thrown error is caught and reported, exactly like the existing task/workflow path");
   }
 }
 
@@ -221,25 +221,25 @@ function shipPipelineResult(steps: ReturnType<typeof taskStep>[], overallComplet
 function verifyResponseFormatter(): void {
   const formatter = new ResponseFormatter();
 
-  assert(formatter.formatAutonomousExecutionResult(undefined) === "Nothing eligible for autonomous execution right now.", "undefined -> the 'nothing eligible' message");
+  assert(formatter.formatAutonomousExecutionResult(undefined) === "✅ Nothing eligible for autonomous execution right now.", "undefined -> the 'nothing eligible' message");
 
   const success = shipPipelineResult(
     [taskStep("verify-git-status", true, false), taskStep("create-commit", true, false), taskStep("push-changes", true, true), taskStep("create-pull-request", true, true)],
     true,
   );
-  assert(formatter.formatAutonomousExecutionResult(success).startsWith("Autonomous execution started."), "a fully completed ship -> the 'execution started' message");
+  assert(formatter.formatAutonomousExecutionResult(success).startsWith("<b>🤖 Autonomous Execution Started</b>"), "a fully completed ship -> the 'execution started' message");
 
   const denied = shipPipelineResult(
     [taskStep("verify-git-status", true, false), taskStep("create-commit", true, false), taskStep("push-changes", false, true, "Rejected by Telegram user 1.")],
     false,
   );
   const deniedText = formatter.formatAutonomousExecutionResult(denied);
-  assert(deniedText.startsWith("Approval required:"), "an approval-gated step that was denied -> the 'approval required' message");
+  assert(deniedText.startsWith("<b>⚠️ Approval Required</b>"), "an approval-gated step that was denied -> the 'approval required' message");
   assert(deniedText.includes("push-changes") && deniedText.includes("Rejected by Telegram user 1."), "the approval-required message names the exact step and carries the real rejection reason");
 
   const otherFailure = shipPipelineResult([taskStep("verify-git-status", false, false, "not a git repository")], false);
   const failureText = formatter.formatAutonomousExecutionResult(otherFailure);
-  assert(failureText.startsWith("Autonomous execution failed.") && !failureText.startsWith("Approval required:"), "a failure unrelated to approval -> the 'execution failed' message, distinct from 'approval required'");
+  assert(failureText.startsWith("<b>❌ Autonomous Execution Failed</b>") && !failureText.startsWith("<b>⚠️ Approval Required</b>"), "a failure unrelated to approval -> the 'execution failed' message, distinct from 'approval required'");
 }
 
 // ---- Part 4: real end-to-end proof that Telegram approvals now complete ----

@@ -1,11 +1,14 @@
 import type { IEngineeringAssistanceEngine } from "../src/assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../src/assistance/types";
 import type { IApplicationService } from "../src/application/interfaces";
+import type { IAutonomousExecutionOrchestrator } from "../src/autonomousexecution/interfaces";
 import type { IRuntimeControlService } from "../src/control/interfaces";
 import type { RepositoryInsightReport } from "../src/decisions/types";
 import type { RuntimeDiagnosticsReport } from "../src/diagnostics/types";
 import type { IExecutionPipeline } from "../src/pipeline/interfaces";
 import type { PipelineRequest, PipelineResult } from "../src/pipeline/types";
+import type { Repository } from "../src/domain/repository/Repository";
+import type { IRepositoryRegistry } from "../src/repositories/interfaces";
 import type { RepositorySnapshot } from "../src/intelligence/types";
 import type { ProjectMemoryEvent } from "../src/memory/types";
 import type { RepositoryRecommendationReport } from "../src/recommendations/types";
@@ -88,6 +91,37 @@ class FakeApplicationService implements IApplicationService {
 class FakeExecutionPipeline implements IExecutionPipeline {
   async run(_request: PipelineRequest): Promise<PipelineResult> {
     throw new Error("not used — no runtime query should ever reach ExecutionPipeline");
+  }
+}
+
+// This suite never sends "/auto-execute" or a "repo=<id>"-prefixed command,
+// so neither dependency TelegramAdapter added since this test was written is
+// ever actually invoked — same "Unused*" placeholder precedent as
+// verify-telegram-autonomous-execution-trigger.ts's UnusedExecutionPipeline.
+class UnusedAutonomousExecutionOrchestrator implements IAutonomousExecutionOrchestrator {
+  async attemptExecution(): Promise<PipelineResult | undefined> {
+    throw new Error("not used -- this suite never sends an autonomous-execute command");
+  }
+}
+
+class UnusedRepositoryRegistry implements IRepositoryRegistry {
+  getAllRepositories(): Repository[] {
+    throw new Error("not used -- this suite never sends a repo=<id>-prefixed command");
+  }
+  getRepository(): Repository {
+    throw new Error("not used -- this suite never sends a repo=<id>-prefixed command");
+  }
+  getActiveRepository(): Repository | undefined {
+    throw new Error("not used -- this suite never sends a repo=<id>-prefixed command");
+  }
+  setActiveRepository(): void {
+    throw new Error("not used -- this suite never sends a repo=<id>-prefixed command");
+  }
+  repositoryExists(): boolean {
+    throw new Error("not used -- this suite never sends a repo=<id>-prefixed command");
+  }
+  refresh(): void {
+    throw new Error("not used -- this suite never sends a repo=<id>-prefixed command");
   }
 }
 
@@ -207,7 +241,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime"));
     const bareText = client.sentMessages[0]?.text;
@@ -223,7 +264,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime status"));
     assert(applicationService.getRuntimeReportCalls === 1, "/runtime status -> getRuntimeReport() called exactly once");
@@ -235,7 +283,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime diagnostics"));
     assert(applicationService.getRuntimeReportCalls === 1, "/runtime diagnostics -> getRuntimeReport() called exactly once");
@@ -247,7 +302,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime monitoring"));
     assert(applicationService.getRuntimeReportCalls === 1, "/runtime monitoring -> getRuntimeReport() called exactly once");
@@ -259,7 +321,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime policy"));
     assert(applicationService.getRuntimeReportCalls === 1, "/runtime policy -> getRuntimeReport() called exactly once");
@@ -272,7 +341,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime foo"));
     await adapter.handleUpdate(buildUpdate(2, AUTHORIZED_USER_ID, "/totally-bogus-command"));
@@ -284,7 +360,7 @@ async function main(): Promise<void> {
     assert(!runtimeUnknownText.startsWith("Something went wrong"), "an unrecognized runtime subcommand is reported as a plain parse error, not a runtime failure");
     assert(runtimeUnknownText.includes('"foo"'), "the unrecognized-subcommand message names the actual unrecognized subcommand");
     assert(
-      runtimeUnknownText.startsWith("Sorry, I don't recognize") && genericUnknownText.startsWith("Sorry, I don't recognize"),
+      runtimeUnknownText.startsWith("⚠️ Sorry, I don't recognize") && genericUnknownText.startsWith("⚠️ Sorry, I don't recognize"),
       "an unrecognized runtime subcommand and a wholly unrecognized top-level command both go through the exact same 'Sorry, I don't recognize...' mechanism",
     );
   }
@@ -295,11 +371,18 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, UNAUTHORIZED_USER_ID, "/runtime report"));
 
-    assert(client.sentMessages[0]?.text === "You are not authorized to use this bot.", "an unauthorized user receives the existing, unchanged rejection message");
+    assert(client.sentMessages[0]?.text === "🚫 You are not authorized to use this bot.", "an unauthorized user receives the existing, unchanged rejection message");
     assert(applicationService.getRuntimeReportCalls === 0, "an unauthorized user's runtime query never reaches ApplicationService.getRuntimeReport()");
   }
 
@@ -308,7 +391,14 @@ async function main(): Promise<void> {
   {
     const applicationService = new FakeApplicationService(sampleReport);
     const client = new FakeTelegramClient();
-    const adapter = new TelegramAdapter(new FakeExecutionPipeline(), applicationService, new FakeTelegramSecurity(AUTHORIZED_USER_ID), client);
+    const adapter = new TelegramAdapter(
+      new FakeExecutionPipeline(),
+      applicationService,
+      new FakeTelegramSecurity(AUTHORIZED_USER_ID),
+      client,
+      new UnusedAutonomousExecutionOrchestrator(),
+      new UnusedRepositoryRegistry(),
+    );
 
     await adapter.handleUpdate(buildUpdate(1, AUTHORIZED_USER_ID, "/runtime report"));
     await adapter.handleUpdate(buildUpdate(2, AUTHORIZED_USER_ID, "/runtime report"));
