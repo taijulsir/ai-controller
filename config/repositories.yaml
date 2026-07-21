@@ -7,5 +7,13 @@ repositories:
     name: Test AI Controller
     path: /home/aiagent/projects/test-ai-controller
     default_branch: main
+  gcpay-backend:
+    name: GCPay Backend
+    path: /home/aiagent/projects/gcpay-backend
+    default_branch: production_2026_mall
+  gcpay-admin:
+    name: GCPay Admin
+    path: /home/aiagent/projects/gcpay-admin
+    default_branch: production_2026_tahweel_mall
 
 active_repository: ai-controller
