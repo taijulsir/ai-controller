@@ -28,6 +28,16 @@ export interface OutgoingMessage {
   inlineKeyboard?: InlineKeyboardButton[][];
 }
 
+// Telegram's own BotCommand shape (setMyCommands/getMyCommands) -- command
+// must match ^[a-z0-9_]{1,32}$ (no hyphens, no leading slash) and
+// description must be 1-256 characters. See TelegramCommands.ts for the
+// actual registered list and why a few real commands (create-pr, list-prs,
+// auto-execute) are deliberately absent from it.
+export interface BotCommand {
+  command: string;
+  description: string;
+}
+
 // The five "runtime-*" variants are distinct from the bare "status"/"insights"
 // query types above (which are repository-scoped) — collision would occur
 // otherwise, since /runtime's "status" subcommand and repository /status are

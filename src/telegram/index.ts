@@ -7,6 +7,7 @@ export * from "./TelegramConstants";
 // unmodified function rather than reimplementing the "telegram:<chatId>:<updateId>"
 // encoding a second time.
 export { buildTelegramCorrelationId } from "./TelegramCorrelation";
+export { BOT_COMMANDS } from "./TelegramCommands";
 export { TelegramAdapter } from "./TelegramAdapter";
 export { TelegramApiClient } from "./TelegramApiClient";
 export { TelegramSecurity } from "./TelegramSecurity";

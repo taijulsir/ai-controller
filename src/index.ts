@@ -49,6 +49,7 @@ import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
 import { UndoService } from "./undo";
 import {
+  BOT_COMMANDS,
   NotifyingAutonomousExecutionOrchestrator,
   ResponseFormatter,
   TelegramAdapter,
@@ -674,6 +675,17 @@ async function bootstrap(): Promise<void> {
     responseFormatter,
   );
   poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramApprovalProvider);
+
+  // Advisory, same philosophy as EnvironmentValidator above: registering the
+  // command list is what makes Telegram show suggestions when a user types
+  // "/", but a transient failure here must never block the bot from
+  // actually starting -- every command still works when typed out in full
+  // regardless of whether this call succeeds.
+  try {
+    await telegramClient.setMyCommands(BOT_COMMANDS);
+  } catch (error) {
+    console.warn(`telegram: failed to register bot commands: ${error instanceof Error ? error.message : error}`);
+  }
 
   console.log("Telegram transport enabled, starting long polling.");
   await poller.start();

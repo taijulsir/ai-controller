@@ -8,7 +8,7 @@ import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { UndoOutcome } from "../undo/types";
-import type { OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
+import type { BotCommand, OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
 
 export interface ITelegramAdapter {
   handleUpdate(update: TelegramUpdate): Promise<void>;
@@ -18,6 +18,10 @@ export interface ITelegramClient {
   sendMessage(message: OutgoingMessage): Promise<void>;
   getUpdates(offset?: number, timeoutSeconds?: number, signal?: AbortSignal): Promise<TelegramUpdate[]>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
+  // Registers the bot's own command list (Bot API's setMyCommands) so
+  // Telegram shows suggestions when the user types "/" -- see
+  // TelegramCommands.ts for the actual list.
+  setMyCommands(commands: readonly BotCommand[]): Promise<void>;
 }
 
 export interface ITelegramTransport {

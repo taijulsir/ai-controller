@@ -3,7 +3,7 @@ import { buildTelegramApiUrl, LONG_POLL_TIMEOUT_SECONDS, TELEGRAM_MAX_MESSAGE_LE
 import { TelegramApiError } from "./errors";
 import type { ITelegramClient } from "./interfaces";
 import { splitMessageText } from "./TelegramMessageSplitter";
-import type { InlineKeyboardButton, OutgoingMessage, TelegramUpdate } from "./types";
+import type { BotCommand, InlineKeyboardButton, OutgoingMessage, TelegramUpdate } from "./types";
 
 interface RawTelegramUpdate {
   update_id: number;
@@ -74,6 +74,22 @@ export class TelegramApiClient implements ITelegramClient {
         parse_mode: "HTML",
         ...(message.inlineKeyboard ? { reply_markup: this.toReplyMarkup(message.inlineKeyboard) } : {}),
       }),
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new TelegramApiError(response.status, body);
+    }
+  }
+
+  async setMyCommands(commands: readonly BotCommand[]): Promise<void> {
+    const { bot } = this.configService.getTelegramConfig();
+    const url = buildTelegramApiUrl(bot.token, "setMyCommands");
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ commands }),
     });
 
     if (!response.ok) {
