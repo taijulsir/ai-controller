@@ -4,5 +4,6 @@ logs/*.log
 *.log
 memory/*.jsonl
 memory/health.json
+memory/recommendation-state.json
 backups/
 .env
