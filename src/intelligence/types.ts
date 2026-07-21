@@ -15,6 +15,10 @@ export interface RepositorySnapshot {
     ahead: number;
     behind: number;
   };
+  // Every local branch name, unsorted, as GitAdapter.listBranches()
+  // returned it — includes `branch.current`. Sorting/highlighting for
+  // display is ResponseFormatter's job, not this snapshot's.
+  branches: string[];
   workingTree: {
     isClean: boolean;
     staged: string[];

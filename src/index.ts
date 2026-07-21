@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { DeferredRuntimeAdministrationService, RuntimeAdministrationService } from "./admin";
 import { ApplicationService } from "./application";
-import { ApprovalEngine } from "./approval";
+import { ApprovalEngine, DeferredApprovalCanceller, DeferredApprovalPendingReader } from "./approval";
 import { AttentionDispatcher } from "./attention";
 import { EngineeringAssistanceEngine } from "./assistance";
 import { AutonomousPlanningEngine } from "./autonomy";
@@ -13,10 +13,18 @@ import { ConfigService } from "./config";
 import { DeferredRuntimeControlService, RuntimeControlService } from "./control";
 import { DecisionEngine } from "./decisions";
 import { RuntimeDiagnosticsEngine } from "./diagnostics";
+import { DeferredExecutionStateReader, ExecutionStateTracker } from "./executionstate";
 import { RepositoryIntelligenceService } from "./intelligence";
 import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor, RecommendationStateStore } from "./monitoring";
-import { TaskPlanner, WorkflowFactory } from "./planner";
+import {
+  DeferredTaskCanceller,
+  TaskCancellationPolicy,
+  TaskPlanner,
+  UndoableTaskPolicy,
+  UndoCheckpointRecorder,
+  WorkflowFactory,
+} from "./planner";
 import { AutonomousPlanEvolutionEngine, AutonomousPlanHistoryService } from "./planhistory";
 import { AutonomousPlanningAnalysisEngine } from "./plananalysis";
 import { AutonomousPlanningService } from "./plan";
@@ -39,6 +47,7 @@ import { ClaudeSessionManager } from "./session";
 import { EnvironmentValidator } from "./startup";
 import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
+import { UndoService } from "./undo";
 import {
   NotifyingAutonomousExecutionOrchestrator,
   ResponseFormatter,
@@ -215,6 +224,34 @@ async function bootstrap(): Promise<void> {
   // DeferredRuntimeAdministrationService's own doc comment for the full
   // trace.
   const deferredRuntimeAdministrationService = new DeferredRuntimeAdministrationService();
+  // Phase A (Task Management): same ordering shape as the three
+  // deferredRuntime* seams above — ApplicationService.getCurrentTask() needs
+  // an IExecutionStateReader and an IApprovalPendingReader at construction
+  // time, but ExecutionStateTracker can only be built once the fully-
+  // decorated ControllerCore stack it wraps exists (built much further down,
+  // near controllerEntryPoint.bind()), and TelegramApprovalProvider can only
+  // be built once telegramClient/telegramSecurity exist (built further down
+  // too). Not a real cycle in either case — see each Deferred* class's own
+  // doc comment — just the same construction-order constraint. Both are
+  // bound below, once their real collaborator exists.
+  const deferredExecutionStateReader = new DeferredExecutionStateReader();
+  const deferredApprovalPendingReader = new DeferredApprovalPendingReader();
+  // Phase A.2 (/task cancel): same ordering shape again -- TaskPlanner
+  // (ITaskCanceller) is built further down, and telegramApprovalProvider
+  // (IApprovalCanceller) further down still. TaskCancellationPolicy needs no
+  // seam at all: a pure transform with zero dependencies, exactly like
+  // ExecutionCoordinator/PlanningEngine/RecommendationEngine above -- no
+  // ordering constraint, constructed directly.
+  const deferredTaskCanceller = new DeferredTaskCanceller();
+  const deferredApprovalCanceller = new DeferredApprovalCanceller();
+  const taskCancellationPolicy = new TaskCancellationPolicy();
+  // Phase B (Undo): unlike every Deferred* seam above, UndoService needs no
+  // seam of its own -- every one of its own dependencies
+  // (repositoryRegistry, deferredExecutionStateReader, projectMemory twice,
+  // narrowly as IUndoableExecutionHistoryProvider and IUndoRecorder) already
+  // exists at this exact point in the file, so it's constructed directly and
+  // handed to ApplicationService as a single collaborator.
+  const undoService = new UndoService(repositoryRegistry, deferredExecutionStateReader, projectMemory, projectMemory);
   const applicationService = new ApplicationService(
     repositoryIntelligence,
     projectMemory,
@@ -234,6 +271,12 @@ async function bootstrap(): Promise<void> {
     autonomousPlanSequencingEngine,
     autonomousPlanSchedulingEngine,
     autonomousPlanRecordingService,
+    deferredExecutionStateReader,
+    deferredApprovalPendingReader,
+    deferredTaskCanceller,
+    deferredApprovalCanceller,
+    taskCancellationPolicy,
+    undoService,
   );
 
   // Strategy Engine / Planning Engine / Execution Coordinator (Phases 7.1-7.3)
@@ -259,7 +302,14 @@ async function bootstrap(): Promise<void> {
   const executionCoordinator = new ExecutionCoordinator();
 
   const workflowFactory = new WorkflowFactory(configService, repositoryRegistry, sessionManager);
-  const taskPlanner = new TaskPlanner(configService, workflowFactory);
+  // Phase B (Undo): both pure/stateless-per-call, no ordering constraint --
+  // constructed directly, same as taskCancellationPolicy above.
+  const undoCheckpointRecorder = new UndoCheckpointRecorder(repositoryRegistry);
+  const undoableTaskPolicy = new UndoableTaskPolicy();
+  const taskPlanner = new TaskPlanner(configService, workflowFactory, undoCheckpointRecorder, undoableTaskPolicy);
+  // Bound as soon as the real ITaskCanceller exists -- see
+  // deferredTaskCanceller's own construction comment above.
+  deferredTaskCanceller.bind(taskPlanner);
 
   // WorkflowOrchestrator needs "the top-of-stack IControllerCore" (plain, or
   // ApprovalEngine-wrapped, now also memory-recording) so every step it runs
@@ -551,6 +601,18 @@ async function bootstrap(): Promise<void> {
   // configured, exactly as AutonomousExecutionWorker's own doc comment
   // describes), or after its own timeout otherwise.
   const telegramApprovalProvider = new TelegramApprovalProvider(telegramClient, telegramSecurity);
+  // Phase A: telegramApprovalProvider also implements IApprovalPendingReader
+  // (isPending(), reading the same `pending` map it already owns for its own
+  // approve/reject/timeout bookkeeping) — bound now that the real instance
+  // exists, so ApplicationService.getCurrentTask() can distinguish "Running"
+  // from "Waiting Approval" without this class's approval mechanics leaking
+  // anywhere else.
+  deferredApprovalPendingReader.bind(telegramApprovalProvider);
+  // Phase A.2: telegramApprovalProvider also implements IApprovalCanceller
+  // (reject(), a third caller of the exact same settle() its own
+  // approve/reject button and timeout already use) — bound alongside
+  // deferredApprovalPendingReader above, same real instance, same timing.
+  deferredApprovalCanceller.bind(telegramApprovalProvider);
   const approvalControllerCore = new ApprovalEngine(plainControllerCore, configService, telegramApprovalProvider);
   // Recording wraps the outermost layer (above approval) so every execution
   // that crosses it — standalone tasks, whole workflows, and each individual
@@ -559,7 +621,17 @@ async function bootstrap(): Promise<void> {
   // changing at all. A recording failure is swallowed inside the decorator
   // itself (Phase 6.2), so it can never affect the real result below.
   const controllerCore = new MemoryRecordingControllerCore(approvalControllerCore, projectMemory);
-  controllerEntryPoint.bind(controllerCore);
+  // Phase A: ExecutionStateTracker becomes the new outermost layer — above
+  // memory-recording, above approval — so every execution that crosses it
+  // (standalone tasks, whole workflows, and each individual workflow step
+  // re-entering via controllerEntryPoint) is tracked, the same "wraps
+  // everything" guarantee MemoryRecordingControllerCore's own comment
+  // already documents for recording. It only observes start/end of each
+  // call; ControllerCore/ApprovalEngine/MemoryRecordingControllerCore/
+  // WorkflowOrchestrator are unchanged.
+  const executionStateTracker = new ExecutionStateTracker(controllerCore);
+  deferredExecutionStateReader.bind(executionStateTracker);
+  controllerEntryPoint.bind(executionStateTracker);
 
   // telegramConfig was already fetched above (Phase 14), before the
   // Background Runtime cluster -- reused here rather than fetched a second
@@ -597,6 +669,7 @@ async function bootstrap(): Promise<void> {
     telegramSecurity,
     telegramClient,
     autonomousExecutionOrchestrator,
+    repositoryRegistry,
     undefined,
     responseFormatter,
   );

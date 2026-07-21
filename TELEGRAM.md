@@ -13,6 +13,7 @@ the target repository; the remaining text splits into command name + args.
 | Command | Kind | Notes |
 |---|---|---|
 | `/analyze [focus text]` | task | args optional |
+| `/review [focus text]` | task | args optional |
 | `/explain <target>` | task | args required |
 | `/implement <description>` | task | args required |
 | `/fix <description>` | task | args required |
@@ -20,12 +21,24 @@ the target repository; the remaining text splits into command name + args.
 | `/push` | task | no args |
 | `/create-pr <title>` | task | args required |
 | `/list-prs` | task | no args |
+| `/fetch` | task | no args; bypass-eligible, no precondition |
+| `/sync` | task | no args; bypass-eligible, fast-forward only |
+| `/merge <branch>` | task | args required; bypass-eligible, approval-gated by default (`require_before` includes `merge`) |
+| `/branch` | query (no args) or task (with args) | bare = current branch info; `<name>` = switch; `create <name>` = create-and-switch |
+| `/branches` | query | lists local branches |
 | `/ship <message>` | **workflow** → becomes a `pipeline`-kind request, distinct from `/commit` even though both build a `create-commit` task shape | args required |
 | `/auto-execute` | autonomous-execute | directly invokes `AutonomousExecutionOrchestrator.attemptExecution()`; no repo/args of its own |
 | `/status [repo=<id>]` | query | |
 | `/history [N]` | query | N must be a positive integer if given |
 | `/insights` | query | |
+| `/recommendations` | query | |
+| `/help` | query | |
 | `/session` | query | |
+| `/session reset` | query | clears the session record |
+| `/session stop` | query | cancels the current task, then clears the session record |
+| `/task` | query | reports the currently running/awaiting-approval task, if any |
+| `/task cancel` | query | cancels the current task, or rejects it if it's awaiting approval — see [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#task-cancellation) |
+| `/undo` | query | reverses the most recent `/implement` or `/fix` — see [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#undo-architecture) |
 | `/runtime` or `/runtime report` | query | bare `/runtime` normalizes to `report` |
 | `/runtime status` / `diagnostics` / `monitoring` / `policy` | query | see [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#runtime-operations-surface) — all five select different sections of the same underlying report |
 

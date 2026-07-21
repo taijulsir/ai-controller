@@ -3,6 +3,7 @@ import type { IConfigService } from "../config/interfaces";
 import type { AttentionEvent } from "../monitoring/types";
 import { NoNotificationRecipientConfiguredError } from "./errors";
 import type { ITelegramClient } from "./interfaces";
+import { escapeHtml } from "./TelegramHtml";
 
 // Telegram's implementation of IAttentionTransport — the only seam this
 // module plugs into. TelegramAdapter/CommandParser/ResponseFormatter are not
@@ -39,8 +40,13 @@ export class TelegramAttentionTransport implements IAttentionTransport {
     return [`Attention needed (${events.length}):`, ...events.map((event) => this.formatEvent(event))].join("\n");
   }
 
+  // sendMessage() now interprets every message as HTML (see
+  // TelegramApiClient's own doc comment) -- event.reason is free text built
+  // by DecisionEngine describing a repository condition, so it's escaped the
+  // same as any other externally-sourced value ResponseFormatter itself
+  // would escape.
   private formatEvent(event: AttentionEvent): string {
     const icon = event.priority === "critical" ? "🔴" : event.priority === "high" ? "⚠" : "ℹ";
-    return `${icon} [${event.repositoryId}] ${event.reason}`;
+    return `${icon} [${escapeHtml(event.repositoryId)}] ${escapeHtml(event.reason)}`;
   }
 }

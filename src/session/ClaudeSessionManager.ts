@@ -45,13 +45,13 @@ export class ClaudeSessionManager implements IClaudeSessionManager {
     this.sessions.delete(repositoryId);
   }
 
-  expireSession(repositoryId: string): void {
-    this.sessions.delete(repositoryId);
-  }
-
   getSessionStatus(repositoryId: string): ClaudeSessionInfo | undefined {
     const record = this.sessions.get(repositoryId);
     return record ? this.toSessionInfo(record) : undefined;
+  }
+
+  getIdleTimeoutMinutes(): number {
+    return this.idleTimeoutMinutes;
   }
 
   private dropIfExpired(repositoryId: string): void {

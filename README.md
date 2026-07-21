@@ -7,8 +7,11 @@ or multi-step workflow through Claude Code and/or git, and returns a structured 
 approval gate in front of sensitive operations like pushing changes or opening a pull request.
 A parallel, read-only intelligence & memory layer tracks repository health, execution history,
 active Claude sessions, and derived insights per repository, surfaced through on-demand
-Telegram queries (`/status`, `/history`, `/insights`, `/session`, `/runtime *`) and — for a
-subset of recommendations — through fully autonomous, unattended execution.
+Telegram queries (`/status`, `/history`, `/insights`, `/session`, `/task`, `/recommendations`,
+`/runtime *`) and — for a subset of recommendations — through fully autonomous, unattended
+execution. A git safety layer (`/fetch`, `/sync`, `/merge`, `/branch`) and an undo mechanism
+(`/undo`) round out engineering-task support alongside the core `/analyze`, `/implement`,
+`/fix`, and `/ship` commands.
 
 v1.0.0 has shipped. The project is now in a documentation/hardening phase, not active feature
 development.
@@ -20,7 +23,8 @@ development.
 | [architecture.md](./architecture.md) | Principles, module dependency graph, composition root |
 | [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md) | Intelligence & memory layer, autonomous planning/execution, runtime operations surface |
 | [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md) | Task types, approval gating, the `"ship"` workflow, Strategy/Planning/Coordination |
-| [TELEGRAM.md](./TELEGRAM.md) | Full command reference, approval flow, security model |
+| [TELEGRAM.md](./TELEGRAM.md) | Command reference, approval flow, security model |
+| [TELEGRAM_COMMANDS.md](./TELEGRAM_COMMANDS.md) | Every command in plain language — what it does, when to use it, an example |
 | [CONFIGURATION.md](./CONFIGURATION.md) | Every `config/*.yaml` field, validation rules, env var interpolation |
 | [DEVELOPMENT.md](./DEVELOPMENT.md) | Setup, npm scripts, running the verification suite, coding conventions |
 | [DEPLOYMENT.md](./DEPLOYMENT.md) | Running in production, PM2/systemd supervision, health checks, backup & recovery |
@@ -101,6 +105,8 @@ src/
   intelligence/  Repository Intelligence — read-only repository snapshot
   memory/        Project Memory — records every execution to disk
   session/       Claude Session Manager
+  executionstate/ Execution State Tracker — decorates Controller Core to track what's currently running
+  undo/          Undo Service — reverses the most recent implement/fix task's file changes
   decisions/     Decision Engine — repository snapshot + history → typed insights
   context/       Context Builder — assembles execution context (narrowly consumed today)
   recommendations/ assistance/        recommendation synthesis and engineering-facing relabeling

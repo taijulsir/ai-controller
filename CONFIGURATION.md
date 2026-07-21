@@ -27,8 +27,9 @@ task:
 
 approval:
   mode: manual
-  require_before_git_push: true
-  require_before_pull_request: false
+  require_before:
+    - push-changes
+    - merge
 
 logging:
   enabled: true
@@ -45,9 +46,10 @@ memory:
 | `controller.name` / `.version` / `.environment` | string | free-form; not validated against an enum |
 | `workspace.root` | string | not currently read by any adapter path resolution — repository paths come from `config/repositories.yaml` directly |
 | `task.max_concurrent_jobs` | number | see [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#taskplanner) |
-| `task.timeout_minutes` | number | per-task timeout; see the known limitation about unobserved `AbortSignal`s |
+| `task.timeout_minutes` | number | per-task timeout; the five Claude-backed task types observe abort on timeout, every git/GitHub-only task type does not — see [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#abortsignal-handling) |
 | `approval.mode` | string | only `"manual"` currently has any effect (enables gating at all); any other value disables approval entirely. Not enum-validated. |
-| `approval.require_before_git_push` / `.require_before_pull_request` | boolean | see [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#approvalengine) |
+| `approval.require_before` | string[] | generic list of task types requiring approval; takes full priority over the two legacy fields below whenever present. Shipped as `[push-changes, merge]`. See [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#approvalengine) |
+| `approval.require_before_git_push` / `.require_before_pull_request` | boolean | legacy fallback, only consulted when `require_before` is absent entirely; superseded (never read) once `require_before` is set |
 | `logging.*` | bool/string/string | **validated but not wired to any actual log output** — see [Unused fields](#unused-fields) |
 | `memory.enabled` | boolean | if `false`, `ProjectMemoryService.record()` no-ops entirely |
 | `memory.directory` | string | base directory for both `events.jsonl` and `autonomous-plans.jsonl` |

@@ -2,4 +2,8 @@ export * from "./errors";
 export * from "./interfaces";
 export * from "./types";
 export { TaskPlanner } from "./TaskPlanner";
+export { TaskCancellationPolicy } from "./TaskCancellationPolicy";
+export { UndoableTaskPolicy } from "./UndoableTaskPolicy";
+export { UndoCheckpointRecorder } from "./UndoCheckpointRecorder";
+export { DeferredTaskCanceller } from "./DeferredTaskCanceller";
 export { WorkflowFactory } from "./WorkflowFactory";

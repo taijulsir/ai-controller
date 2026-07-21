@@ -91,10 +91,24 @@ actively evicts an expired record (`dropIfExpired`, called at the top of `resolv
 plain status query (`getSessionStatus()` — what `/session`, `DecisionEngine`, and
 `StrategyEngine` all use) correctly *reports* `"expired"` once the timeout passes, but does
 **not** delete the stale record — eviction only happens the next time that repository's
-session is actually resolved (i.e. a real execution touches it again), or `resetSession()`/
-`expireSession()` is called explicitly. In practice this is bounded by the (small,
+session is actually resolved (i.e. a real execution touches it again), or `resetSession()`
+(`/session reset`) is called explicitly. In practice this is bounded by the (small,
 config-driven) number of registered repositories, so it's a theoretical rather than practical
 leak.
+
+`SessionLifecycle.deriveSessionLifecycleState(info, hasActiveTask)` adds one pure,
+presentational derivation on top — no new state of its own. It combines
+`ClaudeSessionManager`'s own status with whether `ExecutionStateTracker` currently reports an
+active task for that repository, into exactly one of four labels: `"none"` (no session record),
+`"expired"` (the manager already flagged it), `"active"` (a record exists and a task is
+currently running), or `"idle"` (a record exists, nothing running right now). `/session` uses
+it to pick a status icon; nothing else consumes it.
+
+`/session stop` (`ApplicationService.stopSession()`) composes `cancelCurrentTask()` (see
+[Task cancellation](#task-cancellation) below) with `resetSession()`, capturing whether the
+session was active before either write — a single command that both stops whatever is running
+and clears the session record, rather than requiring `/task cancel` then `/session reset`
+separately.
 
 ### DecisionEngine — Insight catalogue
 
@@ -159,7 +173,12 @@ data another method already computed in the same call. Full method list:
 | `getRepositoryStatus` | `RepositorySnapshot` |
 | `getRepositoryHistory` | `ProjectMemoryEvent[]` |
 | `getRepositoryInsights` | `RepositoryInsightReport` |
-| `getSessionStatus` | `ClaudeSessionInfo \| undefined` |
+| `getSessionStatus` | `SessionReport` (session info + lifecycle state + current task) |
+| `resetSession` | `string` — clears the session record (`/session reset`) |
+| `stopSession` | `SessionStopOutcome` — cancels the current task, then clears the session (`/session stop`) |
+| `getCurrentTask` | `CurrentTaskReport \| undefined` (`/task`) |
+| `cancelCurrentTask` | `TaskCancellationOutcome` — see [Task cancellation](#task-cancellation) (`/task cancel`) |
+| `undoLastExecution` | `Promise<UndoOutcome>` — see [Undo architecture](#undo-architecture) (`/undo`) |
 | `getRecommendations` | `RepositoryRecommendationReport` |
 | `getEngineeringAssistance` | `RepositoryAssistanceReport` |
 | `getEngineeringWorkspace` | `EngineeringWorkspace` — the "everything at once" composed view: snapshot + insights + recommendations + assistance + session + recent history + attention events (if a monitor was wired) |
@@ -315,10 +334,11 @@ can't rate-limit one chatty repository fairly against others.
 
 ### Human-in-the-loop safeguards
 
-1. **`ApprovalPolicy` config gate** — as long as `approval.mode: manual` and
-   `require_before_git_push: true` (both true in the shipped `config/controller.yaml`), every
-   `push-changes` step, autonomous or not, requires approval. Since `shipWorkflow` aborts on
-   first failure, a denied push means `create-pull-request` never runs either.
+1. **`ApprovalPolicy` config gate** — as long as `approval.mode: manual` (the shipped
+   default) and the task's type is listed in `approval.require_before` (shipped as
+   `[push-changes, merge]`), that step requires approval, autonomous or not. Since
+   `shipWorkflow` aborts on first failure, a denied push means `create-pull-request` never
+   runs either.
 2. **Fail-closed correlationId** — described above: with no `operator_chat_id` configured (the
    current shipped state), autonomous execution can synthesize and strategize a request but
    can never complete a real push/PR, because the approval step is denied synchronously.
@@ -331,6 +351,65 @@ can't rate-limit one chatty repository fairly against others.
    consults `RuntimePolicyEngine` at all.
 4. Every mutating action, however triggered and whatever its outcome, is still durably
    recorded to Project Memory via `MemoryRecordingControllerCore`.
+
+### Task cancellation
+
+`/task cancel` (`ApplicationService.cancelCurrentTask()`) is cooperative, not a hard kill, and
+only some task types can even be asked:
+
+1. Reads the current execution snapshot from `ExecutionStateTracker` (via
+   `IExecutionStateReader`); nothing running → `"nothing-running"`.
+2. If that execution is currently **awaiting approval** (checked against
+   `TelegramApprovalProvider`'s pending map via `IApprovalPendingReader`), cancellation means
+   rejecting the approval request instead of touching `TaskPlanner` at all — an awaiting-
+   approval task and a running task are two structurally different things to stop.
+3. Otherwise, checks `TaskCancellationPolicy.canCancel(taskType)` — only `analyze-repository`,
+   `review-code`, `explain-code`, `implement-feature`, and `fix-bug` are cancellable, because
+   these are the only five workflows whose `AbortSignal` is actually observed (they forward it
+   into `ClaudeAdapter.execute()`, which kills the underlying `claude` child process on abort —
+   see [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#abortsignal-handling)). Any other
+   in-progress task type → `"not-cancellable"`.
+4. If cancellable, calls `TaskPlanner.cancel(correlationId)` — the same per-run
+   `AbortController` the execution timeout itself would trigger, just aborted early with a
+   `TaskCancelledError` instead of a timeout, so the caller can tell "cancelled" apart from
+   "timed out." Returns `"cancelled"`, or re-checks execution state to distinguish
+   `"already-cancelling"` from `"already-finished"` if the task completed in the interim.
+
+`TaskPlanner` itself is purely mechanical here — `cancel()` never inspects or judges what it's
+cancelling, it only aborts the matching controller if one exists.
+
+## Undo architecture
+
+`/undo` reverses the most recent **file-editing** task only — `implement-feature` and
+`fix-bug` (`UndoableTaskPolicy`); deterministic git operations (commit/push/PR/branch/merge)
+are a distinct concern, explicitly out of scope for `/undo`.
+
+**Checkpointing.** `TaskPlanner` captures a git tree snapshot (`GitAdapter.createSnapshot()`,
+via `UndoCheckpointRecorder`) both immediately before and immediately after every undoable
+task's execution — on every exit path (success, thrown error, timeout, or cancellation).
+Snapshot capture failure is swallowed so it can never fail the actual task. The resulting
+`{beforeSnapshot, afterSnapshot, taskType, correlationId, capturedAt}` checkpoint is attached
+to the `TaskResult` and persisted as part of the normal execution-history event stream by
+`ProjectMemoryService` — there is no separate undo store. Only the single most recent
+not-yet-undone checkpoint is ever reachable; there is no multi-level undo stack or configurable
+depth.
+
+**`/undo`, two phases (`IUndoService`):**
+1. `buildUndoPlan()` — refuses immediately if `ExecutionStateTracker` reports anything
+   currently running for the repository (`"execution-in-progress"`, never touches files
+   mid-execution). Otherwise finds the most recent undoable, not-yet-undone checkpoint (`
+   "nothing-to-undo"` if none). Diffs `beforeSnapshot` vs `afterSnapshot`
+   (`GitAdapter.diffChangedFiles()`) to compute which paths to restore vs delete, then takes a
+   **fresh live snapshot** and diffs `afterSnapshot` against it — if anything the task touched
+   has changed since (e.g. a manual edit, or a later task touching the same files), the plan is
+   `"drift-detected"` and undo is blocked, listing the conflicting files.
+2. `executeUndoPlan()` — only proceeds if the plan's status is `"ready"`; otherwise throws.
+   Calls `GitAdapter.restorePaths(beforeSnapshot, filesToRestore, filesToDelete)`, then records
+   an `"undo"` event referencing the checkpoint (the original event is never mutated).
+
+An undo failure (e.g. `restorePaths` itself throwing) propagates as a normal thrown error up to
+the Telegram layer — only the three named non-error outcomes above (`nothing-to-undo`,
+`execution-in-progress`, `drift-detected`) are handled as expected, formatted results.
 
 ## Runtime operations surface
 
@@ -368,10 +447,15 @@ them yet:
 - **`ContextBuilder`'s output is computed but not meaningfully consumed** — see
   [ContextBuilder](#contextbuilder) above. `StrategyEngine` keeps only two derived booleans,
   and nothing reads them further downstream.
-- **Workflows do not observe their `AbortSignal`.** `TaskPlanner` threads one into every
-  workflow call for a timeout to cancel, but every workflow implementation ignores it — on
-  timeout, the underlying Claude/git/GitHub call keeps running in the background, unobserved.
-  See [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#known-limitation).
+- **The five Claude-backed workflows observe their `AbortSignal`; every git/GitHub-only
+  workflow still ignores it.** `TaskPlanner` threads an `AbortSignal` into every workflow call
+  (for both timeout and `/task cancel` to abort), but only `analyze-repository`, `review-code`,
+  `explain-code`, `implement-feature`, and `fix-bug` forward it into `ClaudeAdapter.execute()`,
+  which kills the underlying process on abort. For every other task type, on timeout the
+  underlying git/GitHub call keeps running in the background, unobserved — matching exactly
+  the task types `TaskCancellationPolicy` already excludes from `/task cancel` for the same
+  reason. See [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#abortsignal-handling) and
+  [Task cancellation](#task-cancellation) above.
 - **`ProjectMemoryService.getRecentEvents()` re-reads and re-parses the entire `events.jsonl`
   file on every call**, including from the hourly `AutonomousExecutionWorker` tick — unlike
   `AutonomousPlanHistoryService`, which already solves the identical problem with a bounded

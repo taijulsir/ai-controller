@@ -26,10 +26,11 @@ export class RepositoryIntelligenceService implements IRepositoryIntelligenceSer
     const gitAdapter = new GitAdapter(this.repositoryRegistry, repository.id);
     const githubAdapter = new GithubAdapter(this.configService, this.repositoryRegistry, repository.id);
 
-    const [statusResult, commitsResult, pullRequestsResult] = await Promise.allSettled([
+    const [statusResult, commitsResult, pullRequestsResult, branchesResult] = await Promise.allSettled([
       gitAdapter.status(),
       gitAdapter.getRecentCommits(RECENT_COMMITS_LIMIT),
       githubAdapter.listOpenPullRequests(),
+      gitAdapter.listBranches(),
     ]);
 
     const issues: string[] = [];
@@ -50,6 +51,11 @@ export class RepositoryIntelligenceService implements IRepositoryIntelligenceSer
     }
     const openPullRequests: PullRequestSummary[] =
       pullRequestsResult.status === "fulfilled" ? pullRequestsResult.value : [];
+
+    if (branchesResult.status === "rejected") {
+      issues.push(`Could not list branches: ${this.describeFailure(branchesResult.reason)}`);
+    }
+    const branches: string[] = branchesResult.status === "fulfilled" ? branchesResult.value : [];
 
     if (status && !status.isClean) {
       const parts: string[] = [];
@@ -85,6 +91,7 @@ export class RepositoryIntelligenceService implements IRepositoryIntelligenceSer
         ahead: status?.ahead ?? 0,
         behind: status?.behind ?? 0,
       },
+      branches,
       workingTree: {
         isClean: status?.isClean ?? false,
         staged: status?.staged ?? [],

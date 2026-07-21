@@ -4,6 +4,7 @@ import type { AutonomousPlan } from "../autonomy/types";
 import type { IRuntimeControlService } from "../control/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
+import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
@@ -15,8 +16,9 @@ import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types
 import type { AutonomousPlanSchedulingReport } from "../scheduling/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
-import type { ClaudeSessionInfo } from "../session/types";
+import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { RuntimeStatus } from "../status/types";
+import type { UndoOutcome } from "../undo/types";
 import type { EngineeringWorkspace } from "../workspace/types";
 
 // Phase 10.1: the narrow view of IApplicationService's one write operation,
@@ -72,7 +74,44 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   getRepositoryStatus(repositoryId?: string): Promise<RepositorySnapshot>;
   getRepositoryHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]>;
   getRepositoryInsights(repositoryId?: string): Promise<RepositoryInsightReport>;
-  getSessionStatus(repositoryId?: string): ClaudeSessionInfo | undefined;
+  // Phase E: composes ClaudeSessionInfo, the repository's display name, and
+  // the same getCurrentTask() every /task query already exposes, plus a
+  // derived lifecycleState -- see ApplicationService's own doc comment.
+  // Always returns a real report; "no session at all" is itself a
+  // renderable fact, not undefined.
+  getSessionStatus(repositoryId?: string): SessionReport;
+  // Phase E: always succeeds, safe to call at any time -- see
+  // ApplicationService's own doc comment for why resetting mid-flight never
+  // affects anything already running. Returns the resolved repository's
+  // display name so the confirmation can name it explicitly, the same way
+  // every other repo-scoped confirmation in this codebase already does.
+  resetSession(repositoryId?: string): string;
+  // Phase E: composes cancelCurrentTask() (Phase A.2, unchanged) with
+  // resetSession() above -- see ApplicationService's own doc comment.
+  stopSession(repositoryId?: string): SessionStopOutcome;
+  // Composed from two independently-owned sources, neither duplicated here:
+  // IExecutionStateReader (ExecutionStateTracker) reports only that an
+  // execution exists and its metadata; IApprovalPendingReader
+  // (TelegramApprovalProvider) reports only whether that execution's
+  // correlationId is currently awaiting a Telegram decision. This is the one
+  // place those two facts meet to produce a status. Synchronous, like
+  // getSessionStatus() above -- both sources are in-memory reads, nothing
+  // here awaits anything. undefined when no execution is currently tracked
+  // for the resolved repository (rendered by ResponseFormatter as "Idle").
+  getCurrentTask(repositoryId?: string): CurrentTaskReport | undefined;
+  // Phase A.2: composes execution state, approval-pending state, and
+  // ITaskCancellationPolicy's own judgment into one outcome -- see
+  // ApplicationService's own doc comment for the full branching. Synchronous
+  // for the same reason getCurrentTask() is: every source it reads is
+  // in-memory, and ITaskCanceller.cancel()/IApprovalCanceller.reject() are
+  // themselves synchronous (AbortController.abort() and resolving an
+  // already-pending Promise are not I/O).
+  cancelCurrentTask(repositoryId?: string): TaskCancellationOutcome;
+  // Phase B: composes IUndoService's build/execute phases -- see
+  // ApplicationService's own doc comment. Async, unlike getCurrentTask()/
+  // cancelCurrentTask(): UndoService reads project memory history from disk
+  // and calls git, neither of which is an in-memory read.
+  undoLastExecution(repositoryId?: string): Promise<UndoOutcome>;
   getRecommendations(repositoryId?: string): Promise<RepositoryRecommendationReport>;
   getEngineeringAssistance(repositoryId?: string): Promise<RepositoryAssistanceReport>;
   getEngineeringWorkspace(repositoryId?: string): Promise<EngineeringWorkspace>;
