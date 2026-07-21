@@ -8,13 +8,13 @@ export class AnalyzeRepositoryWorkflow implements ITaskWorkflow {
     private readonly shouldContinueSession: boolean,
   ) {}
 
-  async execute(task: Task, _signal: AbortSignal): Promise<WorkflowResult> {
+  async execute(task: Task, signal: AbortSignal): Promise<WorkflowResult> {
     const { input } = task as AnalyzeRepositoryTask;
     const prompt = input?.focus
       ? `Analyze this repository with a focus on: ${input.focus}`
       : "Analyze this repository and summarize its structure, key modules, and overall architecture.";
 
-    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession });
+    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession, signal });
     return { success: true, output: result.output };
   }
 }

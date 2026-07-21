@@ -9,14 +9,14 @@ export class FixBugWorkflow implements ITaskWorkflow {
     private readonly shouldContinueSession: boolean,
   ) {}
 
-  async execute(task: Task, _signal: AbortSignal): Promise<WorkflowResult> {
+  async execute(task: Task, signal: AbortSignal): Promise<WorkflowResult> {
     const { input } = task as FixBugTask;
     if (!input?.description) {
       throw new MissingTaskInputError(task.type, "description");
     }
 
     const prompt = `Fix the following bug: ${input.description}`;
-    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession });
+    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession, signal });
     return { success: true, output: result.output };
   }
 }

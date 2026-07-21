@@ -16,8 +16,18 @@ export interface ControllerConfig {
 
   approval: {
     mode: string;
-    require_before_git_push: boolean;
-    require_before_pull_request: boolean;
+    // Legacy, per-command fields -- still fully validated and honored when
+    // require_before (below) is absent, so any existing config/controller.yaml
+    // that predates require_before keeps working completely unchanged.
+    // Superseded (never consulted by ApprovalPolicy) once require_before is
+    // present, even if these are also present.
+    require_before_git_push?: boolean;
+    require_before_pull_request?: boolean;
+    // Generic replacement: any Task["type"] string (e.g. "push-changes",
+    // "merge") can be listed here without ever touching this type, the
+    // validator, or ApprovalPolicy again for a newly-introduced command.
+    // Optional so existing configs need not adopt it.
+    require_before?: string[];
   };
 
   logging: {

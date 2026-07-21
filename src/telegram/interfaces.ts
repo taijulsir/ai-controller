@@ -1,10 +1,13 @@
 import type { ExecutionResult } from "../controller/types";
 import type { RepositoryInsightReport } from "../decisions/types";
+import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { PipelineResult } from "../pipeline/types";
+import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
-import type { ClaudeSessionInfo } from "../session/types";
+import type { SessionReport, SessionStopOutcome } from "../session/types";
+import type { UndoOutcome } from "../undo/types";
 import type { OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
 
 export interface ITelegramAdapter {
@@ -35,7 +38,42 @@ export interface IResponseFormatter {
   formatRepositoryStatus(snapshot: RepositorySnapshot): string;
   formatHistory(events: ProjectMemoryEvent[]): string;
   formatInsights(report: RepositoryInsightReport): string;
-  formatSessionStatus(info: ClaudeSessionInfo | undefined): string;
+  // Phase E: report is exactly what ApplicationService.getSessionStatus()
+  // composed -- repository name, ClaudeSessionInfo, derived lifecycleState,
+  // and the current task, all already decided upstream.
+  formatSessionStatus(report: SessionReport): string;
+  // Phase E: repositoryName is exactly what ApplicationService.resetSession()
+  // returned -- always a plain confirmation, since resetSession() cannot
+  // fail in a user-visible way.
+  formatSessionResetResult(repositoryName: string): string;
+  // Phase E: outcome is exactly what ApplicationService.stopSession()
+  // composed -- every branch of the underlying cancellation (or lack of one)
+  // is laid out here, never decided here.
+  formatSessionStopResult(outcome: SessionStopOutcome): string;
+  // Static command reference text — no input data, unlike every other
+  // format* method above. Still lives here, not in TelegramAdapter, so
+  // ResponseFormatter stays the single place Telegram-facing text is built.
+  formatHelp(): string;
+  formatRecommendations(report: RepositoryRecommendationReport): string;
+  // Same RepositorySnapshot getRepositoryStatus() already returns for
+  // /status — a narrower view over branch/workingTree only.
+  formatBranch(snapshot: RepositorySnapshot): string;
+  // Same RepositorySnapshot again — a view over branch.current/branches.
+  formatBranches(snapshot: RepositorySnapshot): string;
+  // Phase A (Task Management): report is exactly what
+  // ApplicationService.getCurrentTask() returned -- undefined means no
+  // execution is currently tracked for the resolved repository ("Idle"),
+  // never a fabricated snapshot standing in for a real one.
+  formatCurrentTask(report: CurrentTaskReport | undefined): string;
+  // Phase A.2: outcome is exactly what ApplicationService.cancelCurrentTask()
+  // returned -- every branch (nothing running, already finished, cancelled,
+  // cancelled a pending approval, not cancellable, already cancelling) is
+  // laid out here, never decided here.
+  formatCancelResult(outcome: TaskCancellationOutcome): string;
+  // Phase B: outcome is exactly what ApplicationService.undoLastExecution()
+  // returned -- every branch (nothing to undo, execution in progress, drift
+  // detected, undone) is laid out here, never decided here.
+  formatUndoResult(outcome: UndoOutcome): string;
   formatPipelineResult(result: PipelineResult): string;
   // Phase 12: result is exactly what AutonomousExecutionOrchestrator.attemptExecution()
   // returned -- undefined means nothing eligible was found, never a
@@ -51,6 +89,17 @@ export interface IResponseFormatter {
   formatRuntimeDiagnostics(report: RuntimeReport): string;
   formatRuntimeMonitoring(report: RuntimeReport): string;
   formatRuntimePolicy(report: RuntimeReport): string;
+  // Phase C.1: the one place an unexpected (non-CommandParser) error becomes
+  // a reply -- removes what used to be the same "Something went wrong: ..."
+  // string built inline, three separate times, inside TelegramAdapter.
+  formatUnexpectedError(error: unknown): string;
+  // Phase C.1: the one place a CommandParser rejection becomes a reply --
+  // previously sent to the user as TelegramAdapter's raw error.message, with
+  // no consistent styling.
+  formatCommandError(message: string): string;
+  // Phase C.1: a static literal, moved out of TelegramAdapter so no reply it
+  // sends is ever built inline.
+  formatUnauthorized(): string;
 }
 
 export interface ITelegramSecurity {

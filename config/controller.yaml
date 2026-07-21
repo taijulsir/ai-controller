@@ -12,8 +12,14 @@ task:
 
 approval:
   mode: manual
-  require_before_git_push: true
-  require_before_pull_request: false
+  # Generic list of task types requiring approval -- add an entry here to
+  # gate a newly-introduced command, without any code or schema change.
+  # Equivalent to the previous require_before_git_push: true /
+  # require_before_pull_request: false, plus gating the new "merge" command
+  # (a potentially significant operation) the same way push already is.
+  require_before:
+    - push-changes
+    - merge
 
 logging:
   enabled: true

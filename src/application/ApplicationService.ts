@@ -1,4 +1,5 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
+import type { IApprovalCanceller, IApprovalPendingReader } from "../approval/interfaces";
 import type { IEngineeringAssistanceEngine } from "../assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../assistance/types";
 import type { IAutonomousPlanningEngine } from "../autonomy/interfaces";
@@ -8,6 +9,8 @@ import type { IDecisionEngine } from "../decisions/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { IRuntimeDiagnosticsEngine } from "../diagnostics/interfaces";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
+import type { IExecutionStateReader } from "../executionstate/interfaces";
+import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
@@ -17,6 +20,8 @@ import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "
 import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { IAutonomousPlanningService } from "../plan/interfaces";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
+import type { ITaskCancellationPolicy, ITaskCanceller } from "../planner/interfaces";
+import type { TaskType } from "../planner/types";
 import type { IAutonomousPlanReadinessEngine } from "../planreadiness/interfaces";
 import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
 import type { IAutonomousPlanRecordingService } from "../planrecording/interfaces";
@@ -31,9 +36,12 @@ import type { IRepositoryRegistry } from "../repositories/interfaces";
 import type { IRuntimeReportingEngine } from "../reporting/interfaces";
 import type { RuntimeReport } from "../reporting/types";
 import type { IClaudeSessionManager } from "../session/interfaces";
-import type { ClaudeSessionInfo } from "../session/types";
+import { deriveSessionLifecycleState } from "../session/SessionLifecycle";
+import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { IRuntimeStatusService } from "../status/interfaces";
 import type { RuntimeStatus } from "../status/types";
+import type { IUndoService } from "../undo/interfaces";
+import type { UndoOutcome } from "../undo/types";
 import type { EngineeringWorkspace } from "../workspace/types";
 import { NoActiveRepositoryError } from "./errors";
 import type { IApplicationService } from "./interfaces";
@@ -127,6 +135,46 @@ export class ApplicationService implements IApplicationService {
     // method added to the read façade. recordAutonomousPlanCycle() below is
     // the one place this class and this dependency meet.
     private readonly recordingService: IAutonomousPlanRecordingService,
+    // Phase A (Task Management): both narrow read-only facades over state
+    // this class never owns or duplicates -- ExecutionStateTracker (via
+    // IExecutionStateReader) owns execution metadata, TelegramApprovalProvider
+    // (via IApprovalPendingReader) owns approval-pending state. Neither
+    // concrete instance exists yet when ApplicationService is constructed in
+    // src/index.ts (both wrap collaborators built later in the same
+    // composition root), so a Deferred* seam is passed here for each,
+    // exactly the same ordering-constraint shape as runtimeStatusService/
+    // runtimeControlService/runtimeAdministrationService above. getCurrentTask()
+    // below is the one place this class composes across both.
+    private readonly executionStateReader: IExecutionStateReader,
+    private readonly approvalPendingReader: IApprovalPendingReader,
+    // Phase A.2 (/task cancel): three more narrow, independently-owned
+    // dependencies this class composes but never duplicates. ITaskCanceller
+    // (TaskPlanner) is purely mechanical -- it aborts whatever's registered,
+    // it has no opinion on whether that's wise. ITaskCancellationPolicy is
+    // the pure, stateless judgment of which task types are actually worth
+    // aborting (same shape as ApprovalPolicy) -- consulted here, before
+    // taskCanceller is ever called, so TaskPlanner itself never needs to
+    // know about cancellability. IApprovalCanceller (TelegramApprovalProvider)
+    // rejects a still-pending approval through its own existing settle()
+    // path -- a different mechanism entirely from aborting a running task,
+    // needed because cancelCurrentTask() below has two structurally
+    // different things it might need to stop. taskCanceller and
+    // approvalCanceller are both Deferred* seams (same ordering-constraint
+    // shape as executionStateReader/approvalPendingReader above); the policy
+    // needs no seam at all, being a pure transform with zero dependencies of
+    // its own.
+    private readonly taskCanceller: ITaskCanceller,
+    private readonly approvalCanceller: IApprovalCanceller,
+    private readonly taskCancellationPolicy: ITaskCancellationPolicy,
+    // Phase B (Undo): a single collaborator, not another handful of narrow
+    // Deferred* seams -- UndoService's own dependencies (IRepositoryRegistry,
+    // IExecutionStateReader, IUndoableExecutionHistoryProvider, IUndoRecorder)
+    // are all already available by the time UndoService is constructed in
+    // src/index.ts (the same deferredExecutionStateReader instance
+    // getCurrentTask()/cancelCurrentTask() already use, and the same
+    // projectMemory instance passed in above), so no new ordering-constraint
+    // seam is needed here at all.
+    private readonly undoService: IUndoService,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -149,8 +197,146 @@ export class ApplicationService implements IApplicationService {
     return this.decisionEngine.analyze(snapshot);
   }
 
-  getSessionStatus(repositoryId?: string): ClaudeSessionInfo | undefined {
-    return this.sessionManager.getSessionStatus(this.resolveRepositoryId(repositoryId));
+  // Composes three independently-owned facts, none re-derived or
+  // duplicated here: ClaudeSessionInfo (ClaudeSessionManager's own
+  // metadata), the repository's display name (IRepositoryRegistry, the same
+  // cheap lookup getCurrentTask() already uses), and currentTask -- reusing
+  // getCurrentTask() itself rather than reading ExecutionStateTracker a
+  // second, independent way. lifecycleState is a pure function of the first
+  // and third facts (see deriveSessionLifecycleState) -- no new state of its
+  // own. Always returns a real report, never undefined: "no session at all"
+  // is itself a renderable fact (lifecycleState: "none"), not an absence of
+  // one.
+  getSessionStatus(repositoryId?: string): SessionReport {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const info = this.sessionManager.getSessionStatus(resolvedId);
+    const currentTask = this.getCurrentTask(resolvedId);
+
+    return {
+      repositoryName: this.repositoryRegistry.getRepository(resolvedId).name,
+      info,
+      lifecycleState: deriveSessionLifecycleState(info, currentTask !== undefined),
+      currentTask,
+      idleTimeoutMinutes: this.sessionManager.getIdleTimeoutMinutes(),
+    };
+  }
+
+  // /session reset: always succeeds (a plain, idempotent delete), safe to
+  // call at any time -- resolveSession() is only ever consulted once per
+  // task attempt, at workflow-creation time before Claude even starts, so
+  // resetting mid-flight never affects anything already running, only the
+  // next attempt.
+  resetSession(repositoryId?: string): string {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    this.sessionManager.resetSession(resolvedId);
+    return this.repositoryRegistry.getRepository(resolvedId).name;
+  }
+
+  // /session stop: composes cancelCurrentTask() (Phase A.2, entirely
+  // unchanged -- reused verbatim, not reimplemented) with resetSession()
+  // above. Cancelling stops whatever is actually running right now (if
+  // anything, and if it's a cancellable type); resetting afterward ensures
+  // the next attempt starts a fresh conversation rather than trying to
+  // --continue one whose last turn was just forcibly terminated mid-stream.
+  // sessionWasActive is read before either write, so it reports the
+  // pre-stop state accurately.
+  stopSession(repositoryId?: string): SessionStopOutcome {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const sessionWasActive = this.sessionManager.getSessionStatus(resolvedId) !== undefined;
+    const taskOutcome = this.cancelCurrentTask(resolvedId);
+    this.sessionManager.resetSession(resolvedId);
+    return { taskOutcome, sessionWasActive };
+  }
+
+  // The one place execution state and approval state meet. Reuses the same
+  // resolveRepositoryId() every other query already follows (repo=<id>
+  // override, else the active repository) so /task behaves identically to
+  // /status, /branch, and /recommendations. ExecutionStateTracker reports
+  // only that an execution exists; TelegramApprovalProvider (through
+  // IApprovalPendingReader) reports only whether that execution's own
+  // correlationId is currently awaiting a decision -- neither fact is
+  // re-derived or duplicated here, only combined.
+  getCurrentTask(repositoryId?: string): CurrentTaskReport | undefined {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const snapshot = this.executionStateReader.getCurrent(resolvedId);
+    if (!snapshot) {
+      return undefined;
+    }
+
+    const status = this.approvalPendingReader.isPending(snapshot.correlationId) ? "waiting-approval" : "running";
+    return {
+      status,
+      repositoryName: this.repositoryRegistry.getRepository(resolvedId).name,
+      snapshot,
+    };
+  }
+
+  // Reuses getCurrentTask()'s own logic implicitly via the same
+  // executionStateReader/approvalPendingReader reads (not by calling
+  // getCurrentTask() itself, since that method's CurrentTaskReport shape
+  // carries a repositoryName this method doesn't need) -- still exactly one
+  // read of each underlying fact, never a second, independent one. Branches
+  // on which of two structurally different things needs stopping (a pending
+  // approval vs. a running task) before ever calling either canceller, so
+  // neither TaskPlanner nor TelegramApprovalProvider has to guess which
+  // situation it's being asked to handle.
+  cancelCurrentTask(repositoryId?: string): TaskCancellationOutcome {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const snapshot = this.executionStateReader.getCurrent(resolvedId);
+    if (!snapshot) {
+      return { kind: "nothing-running" };
+    }
+
+    if (this.approvalPendingReader.isPending(snapshot.correlationId)) {
+      const rejected = this.approvalCanceller.reject(snapshot.correlationId, "Cancelled by user via /task cancel.");
+      return rejected ? { kind: "cancelled-approval", snapshot } : { kind: "already-finished" };
+    }
+
+    // The task type actually executing right now: currentStep once a
+    // workflow's own step is in flight, otherwise the bare task itself --
+    // never re-derived, just read off the same snapshot CurrentTaskReport
+    // already exposes. Both fields are always populated from a real
+    // Task["type"] by ExecutionStateTracker (or left "", handled by the
+    // `|| snapshot.task` fallback and the emptiness check below) -- the cast
+    // is the same kind of intentional dynamic-to-static boundary
+    // WorkflowOrchestrator's own buildStepTask() already documents for
+    // itself.
+    const currentTaskType = (snapshot.currentStep || snapshot.task) as TaskType | "";
+    if (!currentTaskType || !this.taskCancellationPolicy.canCancel(currentTaskType as TaskType)) {
+      return { kind: "not-cancellable", snapshot };
+    }
+
+    if (this.taskCanceller.cancel(snapshot.correlationId)) {
+      return { kind: "cancelled", snapshot };
+    }
+    // cancel() returned false: either it finished on its own in the instant
+    // between the two reads above, or a previous cancel request already
+    // aborted it and it hasn't unwound yet -- getCurrent() still finding a
+    // record distinguishes the latter from the former.
+    return this.executionStateReader.getCurrent(resolvedId) ? { kind: "already-cancelling", snapshot } : { kind: "already-finished" };
+  }
+
+  // Composes IUndoService's two phases exactly the way its own doc comment
+  // anticipates: build the plan, then either report why it can't proceed or
+  // hand it straight to executeUndoPlan() -- this class never re-derives any
+  // of the analysis itself, only decides which of the two next steps to take.
+  // Reuses the same resolveRepositoryId() convention as every other method
+  // here, so /undo behaves identically to /status, /branch, /recommendations,
+  // and /task.
+  async undoLastExecution(repositoryId?: string): Promise<UndoOutcome> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const plan = await this.undoService.buildUndoPlan(resolvedId);
+
+    switch (plan.status) {
+      case "nothing-to-undo":
+        return { kind: "nothing-to-undo" };
+      case "execution-in-progress":
+        return { kind: "execution-in-progress" };
+      case "drift-detected":
+        return { kind: "drift-detected", checkpointId: plan.checkpointId!, taskType: plan.taskType!, conflictingFiles: plan.conflictingFiles };
+      case "ready":
+        return this.undoService.executeUndoPlan(plan);
+    }
   }
 
   // Fetches the snapshot and analyzes it exactly once, then hands both —

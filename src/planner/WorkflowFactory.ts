@@ -18,8 +18,14 @@ import { ExplainCodeWorkflow } from "./workflows/ExplainCodeWorkflow";
 import { FixBugWorkflow } from "./workflows/FixBugWorkflow";
 import { GitStatusWorkflow } from "./workflows/GitStatusWorkflow";
 import { ImplementFeatureWorkflow } from "./workflows/ImplementFeatureWorkflow";
+import { CreateBranchWorkflow } from "./workflows/CreateBranchWorkflow";
+import { FetchWorkflow } from "./workflows/FetchWorkflow";
 import { ListPullRequestsWorkflow } from "./workflows/ListPullRequestsWorkflow";
+import { MergeWorkflow } from "./workflows/MergeWorkflow";
 import { PushChangesWorkflow } from "./workflows/PushChangesWorkflow";
+import { ReviewCodeWorkflow } from "./workflows/ReviewCodeWorkflow";
+import { SwitchBranchWorkflow } from "./workflows/SwitchBranchWorkflow";
+import { SyncWorkflow } from "./workflows/SyncWorkflow";
 
 export class WorkflowFactory implements IWorkflowFactory {
   constructor(
@@ -48,6 +54,18 @@ export class WorkflowFactory implements IWorkflowFactory {
         return new CreatePullRequestWorkflow(this.buildGitAdapter(context), this.buildGithubAdapter(context));
       case "list-pull-requests":
         return new ListPullRequestsWorkflow(this.buildGithubAdapter(context));
+      case "review-code":
+        return new ReviewCodeWorkflow(this.buildClaudeAdapter(context), this.resolveShouldContinue(context));
+      case "switch-branch":
+        return new SwitchBranchWorkflow(this.buildGitAdapter(context));
+      case "create-branch":
+        return new CreateBranchWorkflow(this.buildGitAdapter(context));
+      case "fetch":
+        return new FetchWorkflow(this.buildGitAdapter(context));
+      case "sync":
+        return new SyncWorkflow(this.buildGitAdapter(context));
+      case "merge":
+        return new MergeWorkflow(this.buildGitAdapter(context));
       default: {
         const unexpectedTask = task as Task;
         throw new UnknownTaskTypeError(unexpectedTask.type);

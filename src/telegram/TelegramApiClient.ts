@@ -31,14 +31,23 @@ export class TelegramApiClient implements ITelegramClient {
 
   async sendMessage(message: OutgoingMessage): Promise<void> {
     const chunks = splitMessageText(message.text, TELEGRAM_MAX_MESSAGE_LENGTH);
+    const isSplit = chunks.length > 1;
 
     for (let index = 0; index < chunks.length; index++) {
       const isLastChunk = index === chunks.length - 1;
+      // A continuation marker is prepended (not appended) so a reader knows
+      // this is one part of a longer reply before reading it, not after --
+      // ResponseFormatter has no involvement in this: it never knows in
+      // advance whether its own output will need to be split, and doesn't
+      // need to. TELEGRAM_MAX_MESSAGE_LENGTH already leaves enough margin
+      // below Telegram's real 4096-character limit that this prefix never
+      // pushes a chunk over it.
+      const text = isSplit ? `(${index + 1}/${chunks.length})\n${chunks[index]}` : chunks[index];
       // Only the final chunk carries the inline keyboard, so approval
       // buttons never appear more than once for a single logical reply.
       await this.sendSingleMessage({
         chatId: message.chatId,
-        text: chunks[index],
+        text,
         inlineKeyboard: isLastChunk ? message.inlineKeyboard : undefined,
       });
     }
@@ -54,6 +63,15 @@ export class TelegramApiClient implements ITelegramClient {
       body: JSON.stringify({
         chat_id: message.chatId,
         text: message.text,
+        // ResponseFormatter now produces HTML (<b>/<code>), escaping every
+        // externally-sourced value it interpolates -- see its own
+        // escapeHtml()/code() helpers. Telegram's "HTML" mode is used rather
+        // than MarkdownV2 specifically because it only requires escaping
+        // three characters (<, >, &), not MarkdownV2's much larger and
+        // easy-to-miss escape set, which would otherwise risk an entire
+        // message being rejected by a single unescaped character inside
+        // arbitrary Claude/git output.
+        parse_mode: "HTML",
         ...(message.inlineKeyboard ? { reply_markup: this.toReplyMarkup(message.inlineKeyboard) } : {}),
       }),
     });

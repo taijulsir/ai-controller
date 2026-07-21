@@ -9,14 +9,14 @@ export class ExplainCodeWorkflow implements ITaskWorkflow {
     private readonly shouldContinueSession: boolean,
   ) {}
 
-  async execute(task: Task, _signal: AbortSignal): Promise<WorkflowResult> {
+  async execute(task: Task, signal: AbortSignal): Promise<WorkflowResult> {
     const { input } = task as ExplainCodeTask;
     if (!input?.target) {
       throw new MissingTaskInputError(task.type, "target");
     }
 
     const prompt = `Explain the following part of the codebase: ${input.target}`;
-    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession });
+    const result = await this.claudeAdapter.execute(prompt, { continue: this.shouldContinueSession, signal });
     return { success: true, output: result.output };
   }
 }

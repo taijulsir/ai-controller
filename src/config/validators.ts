@@ -68,8 +68,24 @@ export function validateControllerConfig(
     issues.push('"approval" section is missing or invalid');
   } else {
     if (!isString(approval.mode)) issues.push('"approval.mode" must be a string');
-    if (!isBoolean(approval.require_before_git_push)) issues.push('"approval.require_before_git_push" must be a boolean');
-    if (!isBoolean(approval.require_before_pull_request)) issues.push('"approval.require_before_pull_request" must be a boolean');
+
+    // require_before (a generic list of task types) supersedes the two
+    // legacy per-command booleans below when present -- validated as an
+    // array of strings only, never checked against the actual TaskType
+    // union (config/ has no dependency on planner/ types, and an unknown
+    // entry is simply inert rather than a validation failure, the same
+    // tolerance a loosely-typed YAML config already has elsewhere). When
+    // absent, both legacy fields are still required and validated exactly
+    // as before, so an existing config/controller.yaml written before this
+    // field existed keeps validating identically.
+    if (approval.require_before !== undefined) {
+      if (!isStringArray(approval.require_before)) {
+        issues.push('"approval.require_before" must be an array of strings');
+      }
+    } else {
+      if (!isBoolean(approval.require_before_git_push)) issues.push('"approval.require_before_git_push" must be a boolean');
+      if (!isBoolean(approval.require_before_pull_request)) issues.push('"approval.require_before_pull_request" must be a boolean');
+    }
   }
 
   const logging = data.logging;

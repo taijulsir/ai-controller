@@ -32,6 +32,13 @@ of the default active one, e.g. `/repo=my-repo status`.
 - **Type**: Manual.
 - **Example**: `/analyze the authentication module`
 
+### `/review [focus text]`
+- **What it does**: Asks Claude Code to review the repository (or code review a specific area,
+  if you give it one), the same way `/analyze` does for general analysis.
+- **When to use**: When you want a code-review pass over a repository or a specific area.
+- **Type**: Manual.
+- **Example**: `/review the payment webhook handler`
+
 ### `/explain <target>`
 - **What it does**: Asks Claude Code to explain a specific part of the codebase. The target is
   required.
@@ -64,17 +71,18 @@ of the default active one, e.g. `/repo=my-repo status`.
 ### `/push`
 - **What it does**: Pushes the current branch to its remote.
 - **When to use**: After committing, when you're ready to publish your changes.
-- **Type**: Approval-gated — requires approval whenever `approval.require_before_git_push` is
-  `true` in `config/controller.yaml` (it is, by default, in the shipped config).
+- **Type**: Approval-gated — requires approval whenever `push-changes` is listed in
+  `approval.require_before` (it is, by default, in the shipped config). `require_before`, when
+  present, takes full priority over the older `require_before_git_push` flag.
 - **Example**: `/push`
 
 ### `/create-pr <title>`
 - **What it does**: Opens a pull request with the given title against the repository's default
   base branch. Fails if the current branch is already the base branch.
 - **When to use**: After pushing, when you're ready for review.
-- **Type**: Approval-gated — requires approval whenever
-  `approval.require_before_pull_request` is `true` (it is `false` in the shipped config, so this
-  runs immediately by default).
+- **Type**: Approval-gated — requires approval whenever `create-pull-request` is listed in
+  `approval.require_before` (it is not, in the shipped config, so this runs immediately by
+  default).
 - **Example**: `/create-pr Add rate limiting to the webhook endpoint`
 
 ### `/list-prs`
@@ -82,6 +90,54 @@ of the default active one, e.g. `/repo=my-repo status`.
 - **When to use**: To check what's already up for review.
 - **Type**: Manual.
 - **Example**: `/list-prs`
+
+---
+
+## Git operation commands
+
+### `/fetch`
+- **What it does**: Runs `git fetch`, updating remote-tracking refs only. Never touches the
+  working tree, the index, or the current branch.
+- **When to use**: To check whether the remote has new commits before deciding to `/sync`.
+- **Type**: Manual.
+- **Example**: `/fetch`
+
+### `/sync`
+- **What it does**: Fetches, then fast-forwards the current branch to match its upstream. Fails
+  with a clear error instead of merging or rebasing if a fast-forward isn't possible (the
+  branches have diverged), if the current branch is detached, or if the working tree isn't
+  clean.
+- **When to use**: The safe way to pull in remote changes without risking a merge commit or a
+  rebase.
+- **Type**: Manual.
+- **Example**: `/sync`
+
+### `/merge <branch>`
+- **What it does**: Merges the named branch into the current one. Fast-forwards when possible;
+  otherwise attempts a real merge commit. On any conflict, automatically runs `git merge
+  --abort` before reporting the failure, so the working tree is never left mid-conflict. Fails
+  if the working tree isn't clean, the current branch is detached, or the named branch is the
+  current branch. The branch name is required.
+- **When to use**: To bring another branch's changes into the one you're on.
+- **Type**: Approval-gated — requires approval whenever `merge` is listed in
+  `approval.require_before` (it is, by default, in the shipped config).
+- **Example**: `/merge main`
+
+### `/branch [<name> | create <name>]`
+- **What it does**: With no argument, reports the current branch (read-only). With a branch
+  name, switches to it — refusing if the working tree isn't clean. With `create <name>`,
+  creates the branch (at the current commit, carrying any uncommitted changes forward) and
+  switches to it.
+- **When to use**: To check, switch, or create a branch.
+- **Type**: Manual. (The no-argument form is read-only; the other two are bypass-eligible task
+  commands, same as `/commit`/`/push`.)
+- **Example**: `/branch`, `/branch feature/login`, `/branch create feature/login`
+
+### `/branches`
+- **What it does**: Lists local branches for the repository.
+- **When to use**: To see what branches already exist before switching or creating one.
+- **Type**: Manual, read-only.
+- **Example**: `/branches`
 
 ---
 
@@ -117,7 +173,12 @@ of the default active one, e.g. `/repo=my-repo status`.
 
 ---
 
-## Query commands (read-only)
+## Query commands
+
+Parsed as `query`-kind commands (never a `Task`, never through `ExecutionPipeline`). Most are
+pure reads; `/session reset`, `/session stop`, `/task cancel`, and `/undo` are the exceptions —
+each answers with a query-shaped response but also performs a narrowly-scoped write, called out
+individually below.
 
 ### `/status [repo=<id>]`
 - **What it does**: Returns a snapshot of the target repository's current state (git status,
@@ -141,6 +202,19 @@ of the default active one, e.g. `/repo=my-repo status`.
 - **Type**: Manual, read-only.
 - **Example**: `/insights`
 
+### `/help`
+- **What it does**: Returns the list of commands the bot recognizes.
+- **When to use**: As a reminder of available commands.
+- **Type**: Manual, read-only.
+- **Example**: `/help`
+
+### `/recommendations`
+- **What it does**: Returns the system's current ranked recommendations for the repository
+  (the same engine that drives `/auto-execute` and proactive notifications).
+- **When to use**: To see what the system currently suggests doing next.
+- **Type**: Manual, read-only.
+- **Example**: `/recommendations`
+
 ### `/session`
 - **What it does**: Returns the status of the current Claude Code session for the repository, if
   one is active.
@@ -148,6 +222,46 @@ of the default active one, e.g. `/repo=my-repo status`.
   task.
 - **Type**: Manual, read-only.
 - **Example**: `/session`
+
+### `/session reset`
+- **What it does**: Clears the session record for the repository, without affecting any
+  currently running task.
+- **When to use**: To force the next task to start a fresh Claude session instead of
+  continuing the previous one.
+- **Type**: Manual (a targeted write, never approval-gated).
+- **Example**: `/session reset`
+
+### `/session stop`
+- **What it does**: Cancels whatever task is currently running or awaiting approval for the
+  repository (same effect as `/task cancel`), then clears the session record.
+- **When to use**: To fully stop and reset a repository's session in one command.
+- **Type**: Manual (a targeted write, never approval-gated).
+- **Example**: `/session stop`
+
+### `/task`
+- **What it does**: Reports the task currently running (or awaiting approval) for the
+  repository, if any.
+- **When to use**: To check what's currently in progress before starting something else.
+- **Type**: Manual, read-only.
+- **Example**: `/task`
+
+### `/task cancel`
+- **What it does**: Cancels the currently running task, or rejects it if it's awaiting
+  approval. Only `/analyze`, `/review`, `/explain`, `/implement`, and `/fix` are actually
+  cancellable — these are the only task types whose execution observes an abort signal;
+  cancelling any other in-progress task type returns a "not cancellable" result instead.
+- **When to use**: To stop a task you no longer want running.
+- **Type**: Manual (a targeted write, never approval-gated).
+- **Example**: `/task cancel`
+
+### `/undo`
+- **What it does**: Reverses the most recent `/implement` or `/fix` task's file changes,
+  provided nothing is currently running for the repository and none of the affected files have
+  changed since. Refuses (with a specific reason) if there's nothing undoable, if a task is
+  currently in progress, or if drift is detected.
+- **When to use**: To roll back the last Claude-made code change.
+- **Type**: Manual (a targeted write, never approval-gated).
+- **Example**: `/undo`
 
 ### `/runtime` (or `/runtime report`)
 - **What it does**: Returns the full runtime operations report — combined status of the

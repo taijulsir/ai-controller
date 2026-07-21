@@ -11,14 +11,27 @@ import type { IExecutionPipeline } from "./interfaces";
 import type { PipelineContext, PipelineRequest, PipelineResult, PipelineStepOutcome } from "./types";
 
 // Task types whose StrategyEngine recommendation would misrepresent a
-// standalone command's narrow scope: all three collapse into "ShipChanges"
-// under StrategyEngine's task-type cascade (built to judge an integrated
-// delivery intent), so a bare "/push" would otherwise attempt the entire
-// ship workflow instead of just pushing. Bypass-eligible tasks still enter
-// exclusively through this pipeline and still reach ControllerCore only
-// through it — they just skip Strategy/Planning/Coordination for a question
-// that was never in doubt.
-const BYPASS_TASK_TYPES: ReadonlySet<Task["type"]> = new Set(["create-commit", "push-changes", "create-pull-request"]);
+// standalone command's narrow scope, or for which no StrategyEngine category
+// applies at all: create-commit/push-changes/create-pull-request all
+// collapse into "ShipChanges" under StrategyEngine's task-type cascade
+// (built to judge an integrated delivery intent), so a bare "/push" would
+// otherwise attempt the entire ship workflow instead of just pushing.
+// switch-branch/create-branch/fetch/sync/merge have no such category to be
+// misrepresented as — they're local, non-shipping git operations the
+// cascade was never built to reason about. Bypass-eligible tasks still
+// enter exclusively through this pipeline and still reach ControllerCore
+// only through it — they just skip Strategy/Planning/Coordination for a
+// question that was never in doubt.
+const BYPASS_TASK_TYPES: ReadonlySet<Task["type"]> = new Set([
+  "create-commit",
+  "push-changes",
+  "create-pull-request",
+  "switch-branch",
+  "create-branch",
+  "fetch",
+  "sync",
+  "merge",
+]);
 
 // A step's translation into real work: either a ready ExecutionRequest, a
 // structural gap (no capability exists at all — BranchManagement,
@@ -161,9 +174,9 @@ export class ExecutionPipeline implements IExecutionPipeline {
   // workflow variant expects; it never inspects plan.task or reconstructs a
   // message/title itself. VerifyRepository dispatches plan.task verbatim,
   // not a hardcoded verify-git-status: its only producer (the AnalyzeFirst
-  // recommendation) guarantees plan.task is always one of the four safe,
+  // recommendation) guarantees plan.task is always one of the five safe,
   // read-only task types this capability covers, so the user's actual
-  // request — analyze, explain, or list-prs — is what actually runs.
+  // request — analyze, explain, review, or list-prs — is what actually runs.
   private resolveDispatch(step: CapabilityStep, program: CapabilityProgram, correlationId: string): DispatchDecision {
     const { repositoryId, plan } = program;
 

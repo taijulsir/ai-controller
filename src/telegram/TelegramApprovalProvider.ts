@@ -1,7 +1,8 @@
-import type { IApprovalProvider } from "../approval/interfaces";
+import type { IApprovalCanceller, IApprovalPendingReader, IApprovalProvider } from "../approval/interfaces";
 import type { ApprovalDecision, ApprovalRequest } from "../approval/types";
 import { APPROVAL_TIMEOUT_MINUTES } from "./TelegramConstants";
 import { parseTelegramCorrelationId } from "./TelegramCorrelation";
+import { escapeHtml } from "./TelegramHtml";
 import { buildApprovalKeyboard } from "./TelegramKeyboardBuilder";
 import { describeError, logEvent } from "./TelegramLogger";
 import type { ITelegramCallbackHandler, ITelegramClient, ITelegramSecurity } from "./interfaces";
@@ -16,7 +17,7 @@ interface PendingApproval {
 // loses any request that hasn't been approved/rejected yet (the requester's
 // original task call will still be awaiting a promise that never resolves,
 // until the timeout below fires it against a now-empty map).
-export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCallbackHandler {
+export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCallbackHandler, IApprovalPendingReader, IApprovalCanceller {
   private readonly pending = new Map<string, PendingApproval>();
 
   constructor(
@@ -94,6 +95,28 @@ export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCal
     logEvent("info", "telegram.approval.decided", { correlationId, action, userId: callbackQuery.userId });
   }
 
+  // IApprovalPendingReader's one method: exposes exactly what `pending`
+  // already tracks for its own approve/reject/timeout bookkeeping above --
+  // no new state, just a read over it. Lets ApplicationService.getCurrentTask()
+  // distinguish "Running" from "Waiting Approval" without this class's own
+  // approval mechanics leaking anywhere else.
+  isPending(correlationId: string): boolean {
+    return this.pending.has(correlationId);
+  }
+
+  // IApprovalCanceller's one method: a third caller of settle() below,
+  // alongside the Telegram approve/reject button (handleCallback) and the
+  // timeout's own resolve() -- /task cancel reaching this path never adds a
+  // new way for a pending approval to be decided, only a new trigger for the
+  // one that already exists.
+  reject(correlationId: string, reason?: string): boolean {
+    if (!this.pending.has(correlationId)) {
+      return false;
+    }
+    this.settle(correlationId, { approved: false, reason: reason ?? "Cancelled by user." });
+    return true;
+  }
+
   private settle(correlationId: string, decision: ApprovalDecision): void {
     const pending = this.pending.get(correlationId);
     if (!pending) return;
@@ -102,8 +125,16 @@ export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCal
     pending.resolve(decision);
   }
 
+  // sendMessage() now interprets every message as HTML (see
+  // TelegramApiClient's own doc comment) -- request.repositoryId is
+  // operator-configured, not user-typed, but still external to this class,
+  // so it's escaped the same as any other externally-sourced value
+  // ResponseFormatter itself would escape. request.task.type is one of this
+  // codebase's own closed TaskType literals and never needs it, but escaping
+  // it too costs nothing and removes any need to reason about which of the
+  // two is "safe enough" to skip.
   private buildPromptText(request: ApprovalRequest): string {
-    const repoSuffix = request.repositoryId ? ` in repository "${request.repositoryId}"` : "";
-    return `Approval required: "${request.task.type}"${repoSuffix}.\n\nApprove or reject?`;
+    const repoSuffix = request.repositoryId ? ` in repository "${escapeHtml(request.repositoryId)}"` : "";
+    return `Approval required: "${escapeHtml(request.task.type)}"${repoSuffix}.\n\nApprove or reject?`;
   }
 }

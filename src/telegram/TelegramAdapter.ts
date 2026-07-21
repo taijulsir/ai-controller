@@ -2,6 +2,7 @@ import type { IApplicationService } from "../application/interfaces";
 import type { IAutonomousExecutionOrchestrator } from "../autonomousexecution/interfaces";
 import type { IExecutionPipeline } from "../pipeline/interfaces";
 import type { PipelineRequest } from "../pipeline/types";
+import type { IRepositoryRegistry } from "../repositories/interfaces";
 import { CommandParser } from "./CommandParser";
 import type {
   ICommandParser,
@@ -31,6 +32,12 @@ export class TelegramAdapter implements ITelegramAdapter {
     // AutonomousExecutionOrchestrator. Inserted before the two defaulted
     // parameters below so neither has to move.
     private readonly autonomousExecutionOrchestrator: IAutonomousExecutionOrchestrator,
+    // Repository context: an explicit repo=<id> on any command becomes the
+    // active repository for every subsequent command that omits repo= —
+    // set here, once parsing succeeds, before dispatch. Same reasoning as
+    // autonomousExecutionOrchestrator above for where this sits in the
+    // parameter list.
+    private readonly repositoryRegistry: IRepositoryRegistry,
     private readonly commandParser: ICommandParser = new CommandParser(),
     private readonly responseFormatter: IResponseFormatter = new ResponseFormatter(),
   ) {}
@@ -42,7 +49,7 @@ export class TelegramAdapter implements ITelegramAdapter {
     const { chatId, userId, text } = update.message;
 
     if (!this.telegramSecurity.isAuthorized(userId)) {
-      await this.telegramClient.sendMessage({ chatId, text: "You are not authorized to use this bot." });
+      await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnauthorized() });
       return;
     }
 
@@ -52,9 +59,23 @@ export class TelegramAdapter implements ITelegramAdapter {
     } catch (error) {
       await this.telegramClient.sendMessage({
         chatId,
-        text: error instanceof Error ? error.message : "Sorry, I didn't understand that command.",
+        text: this.responseFormatter.formatCommandError(error instanceof Error ? error.message : "Sorry, I didn't understand that command."),
       });
       return;
+    }
+
+    // An explicit repo=<id> becomes the active repository so subsequent
+    // commands that omit repo= resolve to it too (RepositoryRegistry is the
+    // single source every repo-defaulting read already falls back to). Set
+    // before dispatch, for every kind that can carry one — "autonomous-execute"
+    // never does, since it picks its own repository from the schedule.
+    if (parsed.kind !== "autonomous-execute" && parsed.repositoryId) {
+      try {
+        this.repositoryRegistry.setActiveRepository(parsed.repositoryId);
+      } catch (error) {
+        await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
+        return;
+      }
     }
 
     if (parsed.kind === "query") {
@@ -62,10 +83,7 @@ export class TelegramAdapter implements ITelegramAdapter {
         const text = await this.handleQuery(parsed.query, parsed.repositoryId);
         await this.telegramClient.sendMessage({ chatId, text });
       } catch (error) {
-        await this.telegramClient.sendMessage({
-          chatId,
-          text: `Something went wrong: ${error instanceof Error ? error.message : String(error)}`,
-        });
+        await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
       }
       return;
     }
@@ -83,10 +101,7 @@ export class TelegramAdapter implements ITelegramAdapter {
         const result = await this.autonomousExecutionOrchestrator.attemptExecution(correlationId);
         await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatAutonomousExecutionResult(result) });
       } catch (error) {
-        await this.telegramClient.sendMessage({
-          chatId,
-          text: `Something went wrong: ${error instanceof Error ? error.message : String(error)}`,
-        });
+        await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
       }
       return;
     }
@@ -97,10 +112,7 @@ export class TelegramAdapter implements ITelegramAdapter {
       const result = await this.executionPipeline.run(pipelineRequest);
       await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatPipelineResult(result) });
     } catch (error) {
-      await this.telegramClient.sendMessage({
-        chatId,
-        text: `Something went wrong: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
     }
   }
 
@@ -139,6 +151,24 @@ export class TelegramAdapter implements ITelegramAdapter {
         return this.responseFormatter.formatInsights(await this.applicationService.getRepositoryInsights(repositoryId));
       case "session":
         return this.responseFormatter.formatSessionStatus(this.applicationService.getSessionStatus(repositoryId));
+      case "session-reset":
+        return this.responseFormatter.formatSessionResetResult(this.applicationService.resetSession(repositoryId));
+      case "session-stop":
+        return this.responseFormatter.formatSessionStopResult(this.applicationService.stopSession(repositoryId));
+      case "help":
+        return this.responseFormatter.formatHelp();
+      case "recommendations":
+        return this.responseFormatter.formatRecommendations(await this.applicationService.getRecommendations(repositoryId));
+      case "branch":
+        return this.responseFormatter.formatBranch(await this.applicationService.getRepositoryStatus(repositoryId));
+      case "branches":
+        return this.responseFormatter.formatBranches(await this.applicationService.getRepositoryStatus(repositoryId));
+      case "task":
+        return this.responseFormatter.formatCurrentTask(this.applicationService.getCurrentTask(repositoryId));
+      case "task-cancel":
+        return this.responseFormatter.formatCancelResult(this.applicationService.cancelCurrentTask(repositoryId));
+      case "undo":
+        return this.responseFormatter.formatUndoResult(await this.applicationService.undoLastExecution(repositoryId));
       case "runtime-report":
         return this.responseFormatter.formatRuntimeReport(this.applicationService.getRuntimeReport());
       case "runtime-status":

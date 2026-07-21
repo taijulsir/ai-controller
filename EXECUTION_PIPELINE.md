@@ -7,12 +7,13 @@
 
 ## Task types and workflows
 
-`Task` is a closed, 9-variant union (`src/planner/types.ts`). `WorkflowFactory` maps each to
+`Task` is a closed, 15-variant union (`src/planner/types.ts`). `WorkflowFactory` maps each to
 exactly one workflow class:
 
 | Task type | Workflow class | Behavior |
 |---|---|---|
 | `analyze-repository` | `AnalyzeRepositoryWorkflow` | Prompts Claude to analyze the repository (or a focused area, via `input.focus`) |
+| `review-code` | `ReviewCodeWorkflow` | Prompts Claude to review the repository (or a focused area, via `input.focus`) |
 | `explain-code` | `ExplainCodeWorkflow` | Requires `input.target`; prompts Claude to explain that part of the codebase |
 | `implement-feature` | `ImplementFeatureWorkflow` | Requires `input.description`; prompts Claude to implement it |
 | `fix-bug` | `FixBugWorkflow` | Requires `input.description`; prompts Claude to fix it |
@@ -21,9 +22,15 @@ exactly one workflow class:
 | `push-changes` | `PushChangesWorkflow` | `gitAdapter.push()` |
 | `create-pull-request` | `CreatePullRequestWorkflow` | Requires `input.title`; resolves base branch, rejects if current branch equals base, else `githubAdapter.createPullRequest()` |
 | `list-pull-requests` | `ListPullRequestsWorkflow` | `githubAdapter.listOpenPullRequests()`, formatted |
+| `switch-branch` | `SwitchBranchWorkflow` | Requires `input.branch`; rejects a dirty working tree, else `gitAdapter.checkout()` |
+| `create-branch` | `CreateBranchWorkflow` | Requires `input.branch`; `gitAdapter.createBranch()` — no dirty-tree check, since `checkout -b` carries uncommitted changes forward safely |
+| `fetch` | `FetchWorkflow` | `gitAdapter.fetch()` — no precondition; only updates remote-tracking refs, never the working tree |
+| `sync` | `SyncWorkflow` | Rejects detached HEAD or a dirty tree; fetches, then fast-forwards only (`isAncestor` against `@{upstream}`) — never merges or rebases |
+| `merge` | `MergeWorkflow` | Requires `input.branch`; rejects detached HEAD, merging a branch into itself, or a dirty tree; fast-forwards when possible, else attempts a real merge commit and runs `gitAdapter.abortMerge()` on any conflict |
 
-The four Claude-backed workflows resolve `shouldContinueSession` via `ClaudeSessionManager.resolveSession()` —
-`WorkflowFactory` never decides this itself.
+The five Claude-backed workflows (`analyze-repository`, `review-code`, `explain-code`,
+`implement-feature`, `fix-bug`) resolve `shouldContinueSession` via
+`ClaudeSessionManager.resolveSession()` — `WorkflowFactory` never decides this itself.
 
 ## TaskPlanner
 
@@ -31,15 +38,19 @@ The four Claude-backed workflows resolve `shouldContinueSession` via `ClaudeSess
   `ControllerConfig.task.max_concurrent_jobs` before dispatch. Excess requests are rejected
   outright with `TaskConcurrencyLimitExceededError` — there is no queue.
 - **Timeout**: `ControllerConfig.task.timeout_minutes` drives a per-run `AbortController`,
-  raced against `workflow.execute()` via `Promise.race`.
+  raced against `workflow.execute()` via `Promise.race`. The same `AbortController`, keyed by
+  `correlationId`, is also what `/task cancel` aborts on demand — see
+  [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#task-cancellation).
 
-### Known limitation
+### AbortSignal handling
 
-Every workflow implementation names its `AbortSignal` parameter `_signal` and never reads it.
-On timeout, `TaskPlanner.run()` returns a failed `TaskResult` to the caller and decrements its
-concurrency counter — but the abandoned workflow promise (and any underlying Claude/git/GitHub
-child process) keeps running, unobserved, in the background. The signal is wired end-to-end
-but currently inert everywhere it's consumed.
+The five Claude-backed workflows above name their `AbortSignal` parameter `signal` and forward
+it into `ClaudeAdapter.execute()`, which kills the underlying `claude` child process on abort
+(timeout or explicit `/task cancel`) — see `TaskCancellationPolicy.ts`, which lists exactly
+these five as cancellable. Every other workflow (the git/GitHub-only ones) names the parameter
+`_signal` and never reads it: nothing downstream of a fetch/commit/push/PR/branch/merge call
+currently observes an abort signal, so on timeout the underlying git/GitHub call keeps running
+in the background, unobserved, for those task types only.
 
 ## ControllerCore
 
@@ -56,9 +67,13 @@ decorators can stack (in production: `MemoryRecordingControllerCore(ApprovalEngi
 
 `ApprovalPolicy.requiresApproval(task, config)`:
 1. If `approval.mode !== "manual"` → never requires approval.
-2. `push-changes` → `approval.require_before_git_push`.
-3. `create-pull-request` → `approval.require_before_pull_request`.
-4. Everything else → never.
+2. If `approval.require_before` is set (the shipped config sets it to `[push-changes, merge]`)
+   → requires approval iff the task's type is in that list. This generic list takes full
+   priority over the legacy fields below whenever present — a newly gated command is a config
+   change, not a code change.
+3. Otherwise (legacy fallback, only reached when `require_before` is absent): `push-changes` →
+   `approval.require_before_git_push`; `create-pull-request` → `approval.require_before_pull_request`;
+   everything else → never.
 
 **Workflow-kind requests are never gated as a whole** — `ApprovalEngine` passes them straight
 through, because `WorkflowOrchestrator` re-enters through this *same* `ApprovalEngine` instance
@@ -89,11 +104,11 @@ sequenceDiagram
     DCC->>AE: never gated
     AE->>CC: execute
     WO->>DCC: push (push-changes)
-    DCC->>AE: gated if require_before_git_push
+    DCC->>AE: gated (push-changes is in require_before)
     AE-->>AE: await TelegramApprovalProvider
     AE->>CC: execute (only if approved)
     WO->>DCC: create-pr (create-pull-request)
-    DCC->>AE: gated if require_before_pull_request
+    DCC->>AE: gated per require_before (not currently listed)
     AE->>CC: execute (only if approved)
     Note over WO: any step failure/denial stops the sequence — no rollback
 ```
@@ -129,12 +144,12 @@ only thing that actually executes anything.
 `PipelineRequest` is `{kind: "task", task, ...}` or `{kind: "pipeline", message, ...}` — the
 kind describes *how the request is processed*, not what it dispatches. `"pipeline"` kind
 (today: only `/ship`) is **never** bypass-eligible; `"task"` kind is bypass-eligible only for
-three task types.
+eight task types.
 
 ```mermaid
 flowchart TD
     Start["PipelineRequest"] --> Kind{"kind?"}
-    Kind -->|task, type in\ncreate-commit/push-changes/\ncreate-pull-request| Bypass["Bypass:\ndirect ControllerCore.execute()"]
+    Kind -->|task, type in\ncreate-commit/push-changes/create-pull-request/\nswitch-branch/create-branch/fetch/sync/merge| Bypass["Bypass:\ndirect ControllerCore.execute()"]
     Kind -->|task, other type| Full
     Kind -->|pipeline| Full["Full path"]
     Full --> Strategy["StrategyEngine.recommend()\n→ TaskExecutionStrategy"]
@@ -145,13 +160,16 @@ flowchart TD
     Bypass --> CC
 ```
 
-**Bypass**: `create-commit`, `push-changes`, `create-pull-request` task-kind requests skip
-Strategy/Planning/Coordination entirely and call `ControllerCore.execute()` directly — because
-`StrategyEngine`'s task-type cascade would otherwise collapse all three into a
-`"ShipChanges"` recommendation built to judge integrated-delivery *intent*, misjudging a bare
-standalone `/push`. Bypass-eligible requests still flow exclusively through
+**Bypass**: `create-commit`, `push-changes`, `create-pull-request`, `switch-branch`,
+`create-branch`, `fetch`, `sync`, and `merge` task-kind requests skip Strategy/Planning/
+Coordination entirely and call `ControllerCore.execute()` directly. The first three would
+otherwise collapse into a `"ShipChanges"` recommendation built to judge integrated-delivery
+*intent*, misjudging a bare standalone `/push`; the five git-operation types have no
+`StrategyEngine` category at all — they're local, non-shipping git operations the cascade was
+never built to reason about. Bypass-eligible requests still flow exclusively through
 `ExecutionPipeline` and still reach `ControllerCore` only through it — so `ApprovalEngine`
-still applies identically either way.
+still applies identically either way (which is how `merge`'s own approval gate still applies
+even though it bypasses Strategy/Planning/Coordination).
 
 **`StrategyEngine.recommend()`** — 6 possible `RecommendedAction` values, decided in order:
 
@@ -215,8 +233,9 @@ route an unattended trigger's approval prompt to a real chat.
 5. `ControllerCore.execute()` → `WorkflowOrchestrator.run("ship")`.
 6. Four steps, sequentially, each re-entering the full decorated stack (see the sequence
    diagram above): `verify-status` (ungated) → `commit` (ungated) → `push` (gated — real
-   Telegram approval prompt if `require_before_git_push`) → `create-pr` (gated per
-   `require_before_pull_request`, currently `false` in the shipped config).
+   Telegram approval prompt, since `push-changes` is in the shipped config's `require_before`
+   list) → `create-pr` (ungated — `create-pull-request` is not currently listed in
+   `require_before`).
 7. Result flows back up through `WorkflowOrchestrator` → `ControllerCore` → `ApprovalEngine`
    (pass-through) → `MemoryRecordingControllerCore` (records one event) →
    `ExecutionPipeline.dispatch()` → `TelegramAdapter`, formatted and sent to the originating

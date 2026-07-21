@@ -5,11 +5,12 @@ import { ClaudeProcessRunner, type ClaudeProcessHandle } from "./ClaudeProcessRu
 import {
   ClaudeAlreadyRunningError,
   ClaudeCommandError,
+  ClaudeExecutionCancelledError,
   ClaudeExecutionTimeoutError,
   NoActiveRepositoryError,
 } from "./errors";
 import type { ClaudeExecuteOptions, IClaudeAdapter } from "./interfaces";
-import type { ClaudeExecutionResult, ClaudeRunState, ClaudeRunStatus } from "./types";
+import type { ClaudeExecutionResult } from "./types";
 
 // Only the fields this adapter reads from a stream-json NDJSON line; the CLI emits more.
 interface ClaudeStreamEvent {
@@ -27,7 +28,6 @@ interface ClaudeStreamEvent {
 
 export class ClaudeAdapter implements IClaudeAdapter {
   private activeProcess?: ClaudeProcessHandle;
-  private status: ClaudeRunStatus = "idle";
   private lastExitCode: number | null = null;
 
   constructor(
@@ -65,7 +65,6 @@ export class ClaudeAdapter implements IClaudeAdapter {
       prompt,
     ];
 
-    this.status = "running";
     const handle = this.processRunner.spawn(claudeConfig.cli.executable, args, repository.path);
     this.activeProcess = handle;
 
@@ -75,6 +74,24 @@ export class ClaudeAdapter implements IClaudeAdapter {
       timedOut = true;
       handle.kill();
     }, timeoutMinutes * 60_000);
+
+    // Reuses the exact same handle.kill() path the timeout above already
+    // uses -- the only difference is which flag gets set, so the eventual
+    // error message (ClaudeExecutionCancelledError vs.
+    // ClaudeExecutionTimeoutError) tells the truth about which one fired.
+    // Removed in the finally block below so a signal shared across calls
+    // (not the case today -- TaskPlanner creates a fresh AbortController per
+    // run -- but not assumed here) never accumulates stale listeners.
+    let cancelled = false;
+    const onAbort = () => {
+      cancelled = true;
+      handle.kill();
+    };
+    if (options.signal?.aborted) {
+      onAbort();
+    } else {
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+    }
 
     let resultIsError = false;
     let resultErrorSubtype = "";
@@ -111,19 +128,18 @@ export class ClaudeAdapter implements IClaudeAdapter {
       if (timedOut) {
         throw new ClaudeExecutionTimeoutError(timeoutMinutes);
       }
+      if (cancelled) {
+        throw new ClaudeExecutionCancelledError();
+      }
       if (exitCode !== 0) {
         throw new ClaudeCommandError(args, exitCode, handle.getStderr());
       }
       if (resultIsError) {
         throw new ClaudeCommandError(args, exitCode, resultErrorSubtype || "Claude reported an error result");
       }
-
-      this.status = "completed";
-    } catch (error) {
-      this.status = "error";
-      throw error;
     } finally {
       clearTimeout(timeout);
+      options.signal?.removeEventListener("abort", onAbort);
       this.activeProcess = undefined;
     }
   }
@@ -134,21 +150,6 @@ export class ClaudeAdapter implements IClaudeAdapter {
     } catch {
       return undefined;
     }
-  }
-
-  async stopSession(): Promise<void> {
-    if (this.activeProcess) {
-      this.activeProcess.kill();
-      this.status = "stopped";
-    }
-  }
-
-  getStatus(): ClaudeRunState {
-    return { status: this.status, lastExitCode: this.lastExitCode };
-  }
-
-  isRunning(): boolean {
-    return this.activeProcess !== undefined;
   }
 
   private resolveRepository(): Repository {

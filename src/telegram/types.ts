@@ -41,6 +41,32 @@ export type ApplicationQuery =
   | { type: "history"; limit?: number }
   | { type: "insights" }
   | { type: "session" }
+  // Phase E (Claude Session Management): part of the "session" command
+  // family (/session, /session reset, /session stop), parsed by
+  // CommandParser's own buildSessionQuery() -- the exact same shape as the
+  // "task" family's own task-cancel variant above.
+  | { type: "session-reset" }
+  | { type: "session-stop" }
+  | { type: "help" }
+  | { type: "recommendations" }
+  | { type: "branch" }
+  | { type: "branches" }
+  | { type: "task" }
+  // Part of the "task" command family (/task, /task cancel, and future
+  // /task history|logs|retry), parsed by CommandParser's own buildTaskQuery()
+  // -- deliberately still a "query" kind, not a new ParsedCommand kind of its
+  // own: it resolves through ApplicationService + ResponseFormatter exactly
+  // like every other query, it just happens to trigger a targeted,
+  // narrowly-scoped side effect (cancelling) while answering, the same way
+  // recordAutonomousPlanCycle() is a write reachable through
+  // IApplicationService despite that interface's other methods being reads.
+  | { type: "task-cancel" }
+  // Phase B (Undo): a bare, top-level command like /ship, not part of the
+  // "task" family -- it has no subcommand today, so unlike /task cancel it
+  // needs no special repo= handling of its own; /undo repo=x and
+  // repo=x /undo already work via the shared position-0/1 REPO_TOKEN logic
+  // every command already gets.
+  | { type: "undo" }
   | { type: "runtime-report" }
   | { type: "runtime-status" }
   | { type: "runtime-diagnostics" }

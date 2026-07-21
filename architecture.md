@@ -45,8 +45,9 @@
 ## Layered dependency graph
 
 Verified acyclic (zero real, value-level circular imports found via a full graph traversal)
-across all 45 `src/` modules (44 from the original phases, plus Stage 4's `src/startup/`), not
-just the original execution pipeline:
+across all 46 `src/` modules (44 from the original phases, plus Stage 4's `src/startup/`, plus
+`src/executionstate/` and `src/undo/` from the Undo/Task Cancellation phase), not just the
+original execution pipeline:
 
 ```mermaid
 flowchart TB
@@ -57,9 +58,11 @@ flowchart TB
     repositories & config & git & github & approval --> intelligence
     repositories & config --> memory
     session
+    controller --> executionstate
+    git & executionstate & memory & repositories --> undo
     intelligence & memory --> decisions
     intelligence & memory --> context
-    intelligence & memory & decisions & session & repositories --> application
+    intelligence & memory & decisions & session & repositories & executionstate & undo --> application
 
     decisions --> recommendations --> assistance
     intelligence & decisions & session & context --> strategy --> planning --> coordination
@@ -131,7 +134,19 @@ list is larger than is useful to render directly.)*
 - **`session`** — `ClaudeSessionManager` is a pure in-memory metadata/policy store (no
   adapter, no config, no `fs`): one record per repository, expired after 30 minutes of
   inactivity, evicted lazily (only when that repository's session is resolved again — a
-  status query alone does not evict a stale record).
+  status query alone does not evict a stale record). `SessionLifecycle` adds one pure,
+  presentational derivation (`deriveSessionLifecycleState`) on top, combining a session
+  record's status with `executionstate`'s own "is anything running" fact — no new state of
+  its own. See [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#claudesessionmanager).
+- **`executionstate`** — `ExecutionStateTracker implements IControllerCore`, decorating a
+  real one purely to track *metadata* about what's currently executing (repository,
+  correlationId, task/workflow type, current step, start time, re-entrancy depth) in an
+  in-memory map — never an `AbortController` or an adapter reference. Read by
+  `ApplicationService` (`/task`, `/task cancel`, `/undo`) via `IExecutionStateReader`.
+- **`undo`** — `UndoService` reverses the most recent `implement-feature`/`fix-bug` task's
+  file changes only, using `GitAdapter`'s snapshot/diff/restore plumbing plus the same
+  execution-state and project-memory facts every other read-side query already uses. See
+  [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#undo-architecture) for the full two-phase flow.
 - **`decisions`** — `DecisionEngine.analyze()` combines a repository's snapshot and recent
   `ProjectMemoryEvent`s into 9 typed `Insight` kinds. See
   [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#decisionengine--insight-catalogue) for the full table.
@@ -190,6 +205,14 @@ resolves every one of them with the same pattern: an unbound `Deferred*` stand-i
 real thing eventually," and `.bind(realInstance)` is called once the real instance exists —
 always synchronously, before any request can reach it. Calling a `Deferred*` method before
 `bind()` throws a dedicated `*NotBoundError`.
+
+The Task Cancellation/Undo/Approval phases added four more seams of the same shape —
+`DeferredTaskCanceller`, `DeferredExecutionStateReader`, `DeferredApprovalCanceller`, and
+`DeferredApprovalPendingReader` — each because `ApplicationService` is constructed before the
+real collaborator it needs (`TaskPlanner`, the fully-decorated `ControllerCore` stack, and
+`TelegramApprovalProvider`, respectively) exists. Their own doc comments are explicit that most
+of these aren't genuine cycles the way `DeferredControllerCore`'s is — just the identical
+construction-order constraint, solved with the same seam for consistency.
 
 ```mermaid
 flowchart LR
