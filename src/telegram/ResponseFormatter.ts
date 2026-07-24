@@ -722,7 +722,7 @@ export class ResponseFormatter implements IResponseFormatter {
     const suffix = list.cursor
       ? `(showing ${list.items.length} of ${list.total}; use /artifact search to narrow the list)`
       : `(${list.total} total)`;
-    return this.template("📦", "Artifacts", [...lines, "", suffix, "Use /artifact get <id> to download."]);
+    return this.template("📦", "Artifacts", [...lines, "", suffix, "Use /artifact get &lt;id&gt; to download."]);
   }
 
   formatArtifactSearchResults(query: string, list: ArtifactList): string {
@@ -734,7 +734,7 @@ export class ResponseFormatter implements IResponseFormatter {
     return this.template("🔎", `Artifact search: "${this.escapeHtml(query)}"`, [
       ...lines,
       "",
-      `${list.total} ${matchWord}. Use /artifact get <id> to download.`,
+      `${list.total} ${matchWord}. Use /artifact get &lt;id&gt; to download.`,
     ]);
   }
 
@@ -852,7 +852,7 @@ export class ResponseFormatter implements IResponseFormatter {
       return [];
     }
     const items = artifacts.map((artifact) => this.artifactSummaryLine(artifact));
-    return ["", this.bold("📎 Artifacts"), ...this.truncateBulletList(items), "Use /artifact get <id> to download."];
+    return ["", this.bold("📎 Artifacts"), ...this.truncateBulletList(items), "Use /artifact get &lt;id&gt; to download."];
   }
 
   private artifactSummaryLine(artifact: Pick<ArtifactMetadata, "id" | "title" | "type" | "size">): string {
