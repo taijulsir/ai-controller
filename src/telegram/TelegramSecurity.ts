@@ -8,4 +8,9 @@ export class TelegramSecurity implements ITelegramSecurity {
     const { security } = this.configService.getTelegramConfig();
     return security.allowed_users.includes(String(userId));
   }
+
+  isAdmin(userId: number): boolean {
+    const { security } = this.configService.getTelegramConfig();
+    return security.admin_user_id !== undefined && security.admin_user_id === String(userId);
+  }
 }

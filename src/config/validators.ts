@@ -105,6 +105,16 @@ export function validateControllerConfig(
     if (!isString(memory.directory)) issues.push('"memory.directory" must be a string');
   }
 
+  // Optional -- see ControllerConfig.artifacts' own doc comment for the
+  // fallback when this section is absent entirely.
+  if (data.artifacts !== undefined) {
+    if (!isObject(data.artifacts)) {
+      issues.push('"artifacts" section must be an object when present');
+    } else if (!isString(data.artifacts.directory)) {
+      issues.push('"artifacts.directory" must be a string');
+    }
+  }
+
   if (issues.length > 0) fail(filePath, issues);
 
   return data as unknown as ControllerConfig;
@@ -208,8 +218,13 @@ export function validateTelegramConfig(data: unknown, filePath: string): Telegra
   const security = data.security;
   if (!isObject(security)) {
     issues.push('"security" section is missing or invalid');
-  } else if (!isStringArray(security.allowed_users)) {
-    issues.push('"security.allowed_users" must be an array of strings');
+  } else {
+    if (!isStringArray(security.allowed_users)) {
+      issues.push('"security.allowed_users" must be an array of strings');
+    }
+    if (security.admin_user_id !== undefined && !isString(security.admin_user_id)) {
+      issues.push('"security.admin_user_id" must be a string when present');
+    }
   }
 
   const notifications = data.notifications;

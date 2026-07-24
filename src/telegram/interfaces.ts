@@ -1,3 +1,4 @@
+import type { ArtifactList, ArtifactMetadata } from "../artifacts";
 import type { ExecutionResult } from "../controller/types";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
@@ -8,7 +9,7 @@ import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { UndoOutcome } from "../undo/types";
-import type { BotCommand, OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
+import type { BotCommand, OutgoingDocument, OutgoingMessage, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
 
 export interface ITelegramAdapter {
   handleUpdate(update: TelegramUpdate): Promise<void>;
@@ -16,6 +17,10 @@ export interface ITelegramAdapter {
 
 export interface ITelegramClient {
   sendMessage(message: OutgoingMessage): Promise<void>;
+  // Artifact Management: the one place a reply carries a real file rather
+  // than text -- "/artifact get <id>" sends the artifact's own content this
+  // way instead of inlining it into a message body.
+  sendDocument(document: OutgoingDocument): Promise<void>;
   getUpdates(offset?: number, timeoutSeconds?: number, signal?: AbortSignal): Promise<TelegramUpdate[]>;
   answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void>;
   // Registers the bot's own command list (Bot API's setMyCommands) so
@@ -104,8 +109,26 @@ export interface IResponseFormatter {
   // Phase C.1: a static literal, moved out of TelegramAdapter so no reply it
   // sends is ever built inline.
   formatUnauthorized(): string;
+
+  // Artifact Management: list/searchArtifacts already return an ArtifactList
+  // (summaries only) -- these two render it exactly as returned, never
+  // re-sorting or re-filtering.
+  formatArtifactList(list: ArtifactList): string;
+  formatArtifactSearchResults(query: string, list: ArtifactList): string;
+  formatArtifactNotFound(id: string): string;
+  // The caption attached to the sendDocument reply "/artifact get <id>"
+  // produces -- distinct from every other format* method here, since this
+  // one never becomes a standalone sendMessage text.
+  formatArtifactCaption(metadata: ArtifactMetadata): string;
+  formatArtifactDeleteResult(id: string, existed: boolean): string;
+  formatArtifactIndexRebuildResult(result: { before: number; after: number; elapsedMs: number }): string;
 }
 
 export interface ITelegramSecurity {
   isAuthorized(userId: number): boolean;
+  // Distinct from isAuthorized: gates the destructive/maintenance
+  // "/artifact delete" and "/artifact rebuild-index" subcommands to the
+  // single configured admin user, on top of (not instead of) the general
+  // allowed_users check.
+  isAdmin(userId: number): boolean;
 }

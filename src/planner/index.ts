@@ -5,5 +5,6 @@ export { TaskPlanner } from "./TaskPlanner";
 export { TaskCancellationPolicy } from "./TaskCancellationPolicy";
 export { UndoableTaskPolicy } from "./UndoableTaskPolicy";
 export { UndoCheckpointRecorder } from "./UndoCheckpointRecorder";
+export { TaskArtifactRecorder } from "./TaskArtifactRecorder";
 export { DeferredTaskCanceller } from "./DeferredTaskCanceller";
 export { WorkflowFactory } from "./WorkflowFactory";

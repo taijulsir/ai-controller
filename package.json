@@ -11,6 +11,7 @@
     "start": "node dist/index.js",
     "start:checked": "bash scripts/start.sh",
     "build": "tsc",
+    "test": "vitest run",
     "health-check": "tsx scripts/health-check.ts",
     "backup-memory": "bash scripts/backup-memory.sh",
     "pm2:start": "pm2 start ecosystem.config.js",
@@ -25,7 +26,8 @@
     "@types/node": "^26.1.1",
     "pm2": "^7.0.3",
     "tsx": "^4.23.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "yaml": "^2.9.0"

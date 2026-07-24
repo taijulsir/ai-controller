@@ -1,7 +1,14 @@
 import { randomUUID } from "node:crypto";
+import type { ArtifactMetadata } from "../artifacts";
 import type { IConfigService } from "../config/interfaces";
 import { TaskCancelledError, TaskConcurrencyLimitExceededError, TaskTimeoutError } from "./errors";
-import type { ITaskPlanner, IUndoableTaskPolicy, IUndoCheckpointRecorder, IWorkflowFactory } from "./interfaces";
+import type {
+  ITaskArtifactRecorder,
+  ITaskPlanner,
+  IUndoableTaskPolicy,
+  IUndoCheckpointRecorder,
+  IWorkflowFactory,
+} from "./interfaces";
 import type { ExecutionCheckpoint, Task, TaskExecutionContext, TaskResult } from "./types";
 
 export class TaskPlanner implements ITaskPlanner {
@@ -29,6 +36,12 @@ export class TaskPlanner implements ITaskPlanner {
     // un-undoable.
     private readonly undoCheckpointRecorder: IUndoCheckpointRecorder,
     private readonly undoableTaskPolicy: IUndoableTaskPolicy,
+    // Artifact Management: same "never a precondition for real task
+    // execution" philosophy as undoCheckpointRecorder above -- optional, and
+    // a recording failure only leaves that attempt artifact-less, wrapped in
+    // recordArtifactsSafely below exactly like captureSnapshotSafely wraps
+    // undoCheckpointRecorder.
+    private readonly taskArtifactRecorder?: ITaskArtifactRecorder,
   ) {}
 
   async run(task: Task, context: TaskExecutionContext = {}): Promise<TaskResult> {
@@ -57,7 +70,9 @@ export class TaskPlanner implements ITaskPlanner {
         this.rejectOnAbort(abortController.signal, task, timeoutMinutes),
       ]);
       const checkpoint = await this.buildCheckpoint(beforeSnapshot, repositoryId, correlationId, task.type);
-      return { ...result, taskType: task.type, repositoryId: context.repositoryId, correlationId, checkpoint };
+      const taskResult: TaskResult = { ...result, taskType: task.type, repositoryId: context.repositoryId, correlationId, checkpoint };
+      taskResult.artifacts = await this.recordArtifactsSafely(task, taskResult);
+      return taskResult;
     } catch (error) {
       const checkpoint = await this.buildCheckpoint(beforeSnapshot, repositoryId, correlationId, task.type);
       return {
@@ -108,6 +123,24 @@ export class TaskPlanner implements ITaskPlanner {
     } catch (error) {
       console.error(
         `task-planner: failed to capture undo checkpoint (${phase}) -- proceeding without one:`,
+        error instanceof Error ? error.message : error,
+      );
+      return undefined;
+    }
+  }
+
+  // Same "degrade, never block" philosophy as captureSnapshotSafely above --
+  // a recording failure only leaves this one attempt without artifacts, it
+  // never turns a successful task into a failed TaskResult.
+  private async recordArtifactsSafely(task: Task, result: TaskResult): Promise<ArtifactMetadata[] | undefined> {
+    if (!this.taskArtifactRecorder) {
+      return undefined;
+    }
+    try {
+      return await this.taskArtifactRecorder.record(task, result);
+    } catch (error) {
+      console.error(
+        `task-planner: failed to record artifacts -- proceeding without them:`,
         error instanceof Error ? error.message : error,
       );
       return undefined;

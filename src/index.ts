@@ -19,6 +19,7 @@ import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor, RecommendationStateStore } from "./monitoring";
 import {
   DeferredTaskCanceller,
+  TaskArtifactRecorder,
   TaskCancellationPolicy,
   TaskPlanner,
   UndoableTaskPolicy,
@@ -60,6 +61,7 @@ import {
   TelegramSecurity,
   buildTelegramCorrelationId,
 } from "./telegram";
+import { createArtifactModule } from "./artifacts";
 
 function loadEnvFile(): void {
   const envFilePath = path.resolve(__dirname, "../.env");
@@ -86,6 +88,23 @@ async function bootstrap(): Promise<void> {
   }
 
   const repositoryRegistry = new RepositoryRegistry(configService);
+
+  // Artifact Management: built early, unconditionally -- both TaskPlanner
+  // (via TaskArtifactRecorder, below) and ApplicationService need the same
+  // single ArtifactService/maintenance pair, and neither depends on whether
+  // Telegram ends up enabled (analyze/review/fix can also run through
+  // AutonomousExecutionWorker, in the Background Runtime cluster further
+  // down). createArtifactModule() rebuilds the on-disk index before
+  // returning, so it must finish before anything can read or write through
+  // it. controller.artifacts.directory is optional -- absent means a
+  // directory sibling to memory.directory, the same default the module used
+  // before this config section existed.
+  const controllerConfigForArtifacts = configService.getControllerConfig();
+  const artifactsDirectory =
+    controllerConfigForArtifacts.artifacts?.directory ??
+    path.join(path.dirname(controllerConfigForArtifacts.memory.directory), "artifacts");
+  const artifactModule = await createArtifactModule(artifactsDirectory);
+  const taskArtifactRecorder = new TaskArtifactRecorder(artifactModule.service, repositoryRegistry);
 
   // Repository Intelligence / Project Memory / Session Manager / Decision Engine
   // / Context Builder (Phases 6.1-6.5) don't depend on the execution stack at
@@ -278,6 +297,8 @@ async function bootstrap(): Promise<void> {
     deferredApprovalCanceller,
     taskCancellationPolicy,
     undoService,
+    artifactModule.service,
+    artifactModule.maintenance,
   );
 
   // Strategy Engine / Planning Engine / Execution Coordinator (Phases 7.1-7.3)
@@ -307,7 +328,7 @@ async function bootstrap(): Promise<void> {
   // constructed directly, same as taskCancellationPolicy above.
   const undoCheckpointRecorder = new UndoCheckpointRecorder(repositoryRegistry);
   const undoableTaskPolicy = new UndoableTaskPolicy();
-  const taskPlanner = new TaskPlanner(configService, workflowFactory, undoCheckpointRecorder, undoableTaskPolicy);
+  const taskPlanner = new TaskPlanner(configService, workflowFactory, undoCheckpointRecorder, undoableTaskPolicy, taskArtifactRecorder);
   // Bound as soon as the real ITaskCanceller exists -- see
   // deferredTaskCanceller's own construction comment above.
   deferredTaskCanceller.bind(taskPlanner);

@@ -127,6 +127,17 @@ export class GitAdapter implements IGitAdapter {
     }
   }
 
+  async diff(from: string, to: string): Promise<string> {
+    return this.run(GitCommand.diff(from, to));
+  }
+
+  // Binary-safe -- see GitCommandRunner.runBinary's own doc comment for why
+  // this can never go through the ordinary string-returning run() above.
+  async readFile(treeish: string, filePath: string): Promise<Buffer> {
+    const repository = this.resolveRepository();
+    return this.commandRunner.runBinary(repository.path, GitCommand.showFile(treeish, filePath));
+  }
+
   async fetch(): Promise<void> {
     await this.run(GitCommand.fetch());
   }

@@ -1,3 +1,4 @@
+import type { ArtifactList, ArtifactMetadata } from "../artifacts";
 import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
@@ -72,6 +73,9 @@ const HELP_TEXT_LINES: readonly string[] = [
   "/task cancel",
   "/undo",
   "/runtime [report|status|diagnostics|monitoring|policy]",
+  "/artifact",
+  "/artifact get &lt;id&gt;",
+  "/artifact search &lt;query&gt;",
   "",
   "AI",
   "/analyze [focus]",
@@ -158,6 +162,7 @@ export class ResponseFormatter implements IResponseFormatter {
     if (taskResult.output) {
       lines.push("", this.escapeHtml(taskResult.output));
     }
+    lines.push(...this.artifactsFooterLines(taskResult.artifacts));
     return this.template("✅", "Task Completed", lines);
   }
 
@@ -529,7 +534,7 @@ export class ResponseFormatter implements IResponseFormatter {
       lastOutcome.result.kind === "task" &&
       lastOutcome.result.taskResult.success
     ) {
-      return this.formatCodeReview(lastOutcome.result.taskResult.output);
+      return this.formatCodeReview(lastOutcome.result.taskResult.output, lastOutcome.result.taskResult.artifacts);
     }
 
     const lines = [this.field("Plan", this.humanizeRecommendedAction(result.strategy.recommendedAction)), ""];
@@ -597,8 +602,11 @@ export class ResponseFormatter implements IResponseFormatter {
   // returned verbatim in taskResult.output — same trust boundary every other
   // task output already crosses here (format() appends taskResult.output
   // unmodified too, escaped the same way). This only adds the header.
-  private formatCodeReview(output: string | undefined): string {
-    return this.template("🔍", "Code Review", [this.escapeHtml(output ?? "No findings.")]);
+  private formatCodeReview(output: string | undefined, artifacts?: ArtifactMetadata[]): string {
+    return this.template("🔍", "Code Review", [
+      this.escapeHtml(output ?? "No findings."),
+      ...this.artifactsFooterLines(artifacts),
+    ]);
   }
 
   private formatPipelineStepOutcome(outcome: PipelineStepOutcome): string {
@@ -706,6 +714,54 @@ export class ResponseFormatter implements IResponseFormatter {
     return "🚫 You are not authorized to use this bot.";
   }
 
+  formatArtifactList(list: ArtifactList): string {
+    if (list.items.length === 0) {
+      return "No artifacts stored yet. Artifacts appear here after /analyze, /review, or /fix.";
+    }
+    const lines = list.items.map((item) => this.artifactSummaryLine(item));
+    const suffix = list.cursor
+      ? `(showing ${list.items.length} of ${list.total}; use /artifact search to narrow the list)`
+      : `(${list.total} total)`;
+    return this.template("📦", "Artifacts", [...lines, "", suffix, "Use /artifact get <id> to download."]);
+  }
+
+  formatArtifactSearchResults(query: string, list: ArtifactList): string {
+    if (list.items.length === 0) {
+      return `No artifacts match "${this.escapeHtml(query)}".`;
+    }
+    const lines = list.items.map((item) => this.artifactSummaryLine(item));
+    const matchWord = list.total === 1 ? "match" : "matches";
+    return this.template("🔎", `Artifact search: "${this.escapeHtml(query)}"`, [
+      ...lines,
+      "",
+      `${list.total} ${matchWord}. Use /artifact get <id> to download.`,
+    ]);
+  }
+
+  formatArtifactNotFound(id: string): string {
+    return `No artifact found with id "${this.escapeHtml(id)}".`;
+  }
+
+  formatArtifactCaption(metadata: ArtifactMetadata): string {
+    return [
+      this.field("Artifact", this.escapeHtml(metadata.title)),
+      this.field("Type", this.code(metadata.type)),
+      this.field("Size", this.formatBytes(metadata.size)),
+    ].join("\n");
+  }
+
+  formatArtifactDeleteResult(id: string, existed: boolean): string {
+    return existed ? `Deleted artifact ${this.code(id)}.` : `No artifact found with id "${this.escapeHtml(id)}"; nothing deleted.`;
+  }
+
+  formatArtifactIndexRebuildResult(result: { before: number; after: number; elapsedMs: number }): string {
+    return this.template("🔧", "Artifact Index Rebuilt", [
+      this.field("Elapsed", `${result.elapsedMs}ms`),
+      this.field("Before", String(result.before)),
+      this.field("After", String(result.after)),
+    ]);
+  }
+
   // --- Shared template/escaping helpers -------------------------------
   //
   // The one presentation template every format* method above builds on:
@@ -784,6 +840,29 @@ export class ResponseFormatter implements IResponseFormatter {
     const diffDays = Math.round(diffHours / 24);
     if (diffDays < 7) return `${diffDays}d ago`;
     return date.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
+  }
+
+  // Shared by format()/formatCodeReview() -- the footer appended to a task's
+  // own reply when TaskArtifactRecorder produced anything for it. Empty
+  // (never a trailing blank section) when artifacts is undefined or empty,
+  // so a task type this class never records for renders identically to
+  // before artifacts existed.
+  private artifactsFooterLines(artifacts?: ArtifactMetadata[]): string[] {
+    if (!artifacts || artifacts.length === 0) {
+      return [];
+    }
+    const items = artifacts.map((artifact) => this.artifactSummaryLine(artifact));
+    return ["", this.bold("📎 Artifacts"), ...this.truncateBulletList(items), "Use /artifact get <id> to download."];
+  }
+
+  private artifactSummaryLine(artifact: Pick<ArtifactMetadata, "id" | "title" | "type" | "size">): string {
+    return `${this.code(artifact.id)} ${this.escapeHtml(artifact.title)} (${this.escapeHtml(artifact.type)}, ${this.formatBytes(artifact.size)})`;
+  }
+
+  private formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
   }
 
   private formatDuration(durationMs: number): string {

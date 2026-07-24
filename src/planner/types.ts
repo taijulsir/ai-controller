@@ -1,3 +1,5 @@
+import type { ArtifactMetadata } from "../artifacts";
+
 export type TaskType =
   | "analyze-repository"
   | "explain-code"
@@ -140,4 +142,10 @@ export interface TaskResult extends WorkflowResult {
   repositoryId?: string;
   correlationId: string;
   checkpoint?: ExecutionCheckpoint;
+  // Artifact Management: populated by ITaskArtifactRecorder for the task
+  // types it covers (analyze-repository, review-code, fix-bug) on a
+  // successful run -- undefined for every other task type, and also when
+  // recording itself failed (never a precondition for a real task result,
+  // same "degrade, never block" philosophy as checkpoint above).
+  artifacts?: ArtifactMetadata[];
 }

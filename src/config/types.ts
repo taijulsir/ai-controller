@@ -40,6 +40,14 @@ export interface ControllerConfig {
     enabled: boolean;
     directory: string;
   };
+
+  // Optional: absent means the artifact store lives in a directory sibling
+  // to memory.directory (the same default the module already used before
+  // this section existed) -- no existing config/controller.yaml needs to
+  // change to keep working.
+  artifacts?: {
+    directory: string;
+  };
 }
 
 export interface ClaudeConfig {
@@ -94,6 +102,12 @@ export interface TelegramConfig {
 
   security: {
     allowed_users: string[];
+    // Optional. Distinct from allowed_users (who may use the bot at all):
+    // this is the single user permitted to run the destructive/maintenance
+    // "/artifact delete" and "/artifact rebuild-index" subcommands. Absent ->
+    // those subcommands are unreachable for everyone, fail-closed the same
+    // way operator_chat_id's absence fails closed elsewhere in this config.
+    admin_user_id?: string;
   };
 
   notifications: {

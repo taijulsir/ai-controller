@@ -3,7 +3,7 @@ import { buildTelegramApiUrl, LONG_POLL_TIMEOUT_SECONDS, TELEGRAM_MAX_MESSAGE_LE
 import { TelegramApiError } from "./errors";
 import type { ITelegramClient } from "./interfaces";
 import { splitMessageText } from "./TelegramMessageSplitter";
-import type { BotCommand, InlineKeyboardButton, OutgoingMessage, TelegramUpdate } from "./types";
+import type { BotCommand, InlineKeyboardButton, OutgoingDocument, OutgoingMessage, TelegramUpdate } from "./types";
 
 interface RawTelegramUpdate {
   update_id: number;
@@ -76,6 +76,27 @@ export class TelegramApiClient implements ITelegramClient {
       }),
     });
 
+    if (!response.ok) {
+      const body = await response.text();
+      throw new TelegramApiError(response.status, body);
+    }
+  }
+
+  // multipart/form-data via the Bot API's own sendDocument endpoint --
+  // distinct from sendMessage above, which only ever sends JSON text.
+  async sendDocument(document: OutgoingDocument): Promise<void> {
+    const { bot } = this.configService.getTelegramConfig();
+    const url = buildTelegramApiUrl(bot.token, "sendDocument");
+
+    const form = new FormData();
+    form.append("chat_id", String(document.chatId));
+    if (document.caption) {
+      form.append("caption", document.caption);
+      form.append("parse_mode", "HTML");
+    }
+    form.append("document", new Blob([new Uint8Array(document.content)]), document.filename);
+
+    const response = await fetch(url, { method: "POST", body: form });
     if (!response.ok) {
       const body = await response.text();
       throw new TelegramApiError(response.status, body);

@@ -44,6 +44,12 @@ export const GitCommand = {
   // written assuming every line is exactly one of A/M/D -- forcing renames
   // off keeps that assumption true regardless of environment.
   diffNameStatus: (from: string, to: string): string[] => ["diff", "--no-renames", "--name-status", from, to],
+  // Same two-trees precondition as diffNameStatus above, minus --name-status
+  // -- the full unified patch instead of just the file list.
+  diff: (from: string, to: string): string[] => ["diff", "--no-renames", from, to],
+  // Reads one path's blob content as it existed at treeish, via git's own
+  // "<tree>:<path>" object syntax -- never touches the working tree or index.
+  showFile: (treeish: string, filePath: string): string[] => ["show", `${treeish}:${filePath}`],
   // --source=<treeish> restores the *working tree* copy of each pathspec from
   // that snapshot -- never touches HEAD or the current branch, since a
   // pathspec (the "--" and everything after it) is present. Callers only

@@ -1,5 +1,6 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
 import type { IApprovalCanceller, IApprovalPendingReader } from "../approval/interfaces";
+import type { ArtifactContent, ArtifactList, ArtifactMetadata, IArtifactMaintenance, IArtifactService } from "../artifacts";
 import type { IEngineeringAssistanceEngine } from "../assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../assistance/types";
 import type { IAutonomousPlanningEngine } from "../autonomy/interfaces";
@@ -175,6 +176,12 @@ export class ApplicationService implements IApplicationService {
     // projectMemory instance passed in above), so no new ordering-constraint
     // seam is needed here at all.
     private readonly undoService: IUndoService,
+    // Artifact Management: the same single ArtifactService/maintenance pair
+    // src/index.ts constructs via createArtifactModule() for TaskArtifactRecorder
+    // -- this class never constructs or rebuilds its own, it only exposes
+    // read/search/delete/rebuild over the one shared instance.
+    private readonly artifactService: IArtifactService,
+    private readonly artifactMaintenance: IArtifactMaintenance,
     // Optional: Engineering Workspace must compose successfully whether or
     // not a monitoring service exists in this deployment. Monitoring is not
     // wired into the composition root yet (Phase 7.7's scheduler/runtime
@@ -434,6 +441,38 @@ export class ApplicationService implements IApplicationService {
     const status = this.runtimeStatusService.getStatus();
     const diagnostics = this.runtimeDiagnosticsEngine.diagnose(status);
     return this.runtimeReportingEngine.buildReport(status, diagnostics);
+  }
+
+  async listArtifacts(repositoryId?: string): Promise<ArtifactList> {
+    return this.artifactService.list(repositoryId ? { repositoryId } : {});
+  }
+
+  async getArtifact(id: string): Promise<ArtifactMetadata | null> {
+    return this.artifactService.get(id);
+  }
+
+  async getArtifactContent(id: string): Promise<ArtifactContent | null> {
+    return this.artifactService.getContent(id);
+  }
+
+  async searchArtifacts(query: string, repositoryId?: string): Promise<ArtifactList> {
+    return this.artifactService.search(query, repositoryId ? { repositoryId } : {});
+  }
+
+  async deleteArtifact(id: string): Promise<boolean> {
+    const existed = await this.artifactService.exists(id);
+    if (existed) {
+      await this.artifactService.delete(id);
+    }
+    return existed;
+  }
+
+  async rebuildArtifactIndex(): Promise<{ before: number; after: number; elapsedMs: number }> {
+    const before = (await this.artifactService.list({ limit: 1 })).total;
+    const startedAt = Date.now();
+    await this.artifactMaintenance.rebuildIndex();
+    const after = (await this.artifactService.list({ limit: 1 })).total;
+    return { before, after, elapsedMs: Date.now() - startedAt };
   }
 
   // Phase 9.1: portfolio-wide, unlike every other method here — reuses

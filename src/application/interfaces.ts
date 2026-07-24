@@ -1,4 +1,5 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
+import type { ArtifactContent, ArtifactList, ArtifactMetadata } from "../artifacts";
 import type { RepositoryAssistanceReport } from "../assistance/types";
 import type { AutonomousPlan } from "../autonomy/types";
 import type { IRuntimeControlService } from "../control/interfaces";
@@ -190,4 +191,20 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   // Phase 8.9: synchronous, same reasoning — RuntimeReportingEngine.buildReport()
   // is a pure, synchronous transform, nothing here awaits anything.
   getRuntimeReport(): RuntimeReport;
+
+  // Artifact Management: unlike every repository-scoped method above, these
+  // never call resolveRepositoryId -- an unset repositoryId means "across
+  // every repository," not "use the active one," since browsing/retrieving
+  // artifacts is a portfolio-wide concern the same way getAutonomousPlan()
+  // is, not a single-repository one.
+  listArtifacts(repositoryId?: string): Promise<ArtifactList>;
+  getArtifact(id: string): Promise<ArtifactMetadata | null>;
+  getArtifactContent(id: string): Promise<ArtifactContent | null>;
+  searchArtifacts(query: string, repositoryId?: string): Promise<ArtifactList>;
+  // Destructive -- TelegramAdapter gates this behind TelegramSecurity.isAdmin
+  // before ever calling it, the same way it already gates the mutating
+  // "task cancel"/"undo" surfaces at the transport layer, not here.
+  deleteArtifact(id: string): Promise<boolean>;
+  // Maintenance, not a business query -- same admin gate as deleteArtifact.
+  rebuildArtifactIndex(): Promise<{ before: number; after: number; elapsedMs: number }>;
 }

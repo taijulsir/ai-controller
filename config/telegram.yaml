@@ -7,6 +7,7 @@ bot:
 security:
   allowed_users:
     - "8078199876"
+  admin_user_id: "8078199876"
 
 notifications:
   task_started: true

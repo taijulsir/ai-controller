@@ -79,8 +79,17 @@ export class TelegramAdapter implements ITelegramAdapter {
     }
 
     if (parsed.kind === "query") {
+      // "artifact-get" sends the artifact's own content back as a document,
+      // not a formatted text reply -- handled here, before the generic
+      // handleQuery() switch every other query type goes through, the same
+      // way "autonomous-execute" below sits outside the "task"/"workflow"
+      // pipeline path.
+      if (parsed.query.type === "artifact-get") {
+        await this.handleArtifactGet(chatId, parsed.query.id);
+        return;
+      }
       try {
-        const text = await this.handleQuery(parsed.query, parsed.repositoryId);
+        const text = await this.handleQuery(parsed.query, parsed.repositoryId, this.telegramSecurity.isAdmin(userId));
         await this.telegramClient.sendMessage({ chatId, text });
       } catch (error) {
         await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
@@ -133,13 +142,47 @@ export class TelegramAdapter implements ITelegramAdapter {
     return { kind: "pipeline", message, repositoryId: parsed.repositoryId, correlationId };
   }
 
+  // Fetches the artifact's content and uploads it as a Telegram document --
+  // the one query type that never becomes a formatted text sendMessage.
+  // "Not found" and unexpected errors still degrade to an ordinary text
+  // reply, same as every other query.
+  private async handleArtifactGet(chatId: number, id: string): Promise<void> {
+    try {
+      const content = await this.applicationService.getArtifactContent(id);
+      if (!content) {
+        await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatArtifactNotFound(id) });
+        return;
+      }
+      const chunks: Buffer[] = [];
+      for await (const chunk of content.data) {
+        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      }
+      await this.telegramClient.sendDocument({
+        chatId,
+        filename: content.metadata.filename,
+        content: Buffer.concat(chunks),
+        caption: this.responseFormatter.formatArtifactCaption(content.metadata),
+      });
+    } catch (error) {
+      await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
+    }
+  }
+
   // Phase 8.10: each "runtime-*" case calls ApplicationService.getRuntimeReport()
   // exactly once, within that case alone — the switch executes exactly one
   // case per call, so no runtime query ever fetches the report more than
   // once. No new ApplicationService method exists for any of these views;
   // all five are different selections over the same RuntimeReport, decided
   // entirely inside ResponseFormatter.
-  private async handleQuery(query: ApplicationQuery, repositoryId?: string): Promise<string> {
+  //
+  // Artifact Management: "artifact-delete"/"artifact-rebuild-index" are the
+  // only two cases that consult isAdmin -- every other case here is exactly
+  // as available to a non-admin authorized user as it always was.
+  private async handleQuery(
+    query: Exclude<ApplicationQuery, { type: "artifact-get" }>,
+    repositoryId: string | undefined,
+    isAdmin: boolean,
+  ): Promise<string> {
     switch (query.type) {
       case "status":
         return this.responseFormatter.formatRepositoryStatus(await this.applicationService.getRepositoryStatus(repositoryId));
@@ -179,6 +222,23 @@ export class TelegramAdapter implements ITelegramAdapter {
         return this.responseFormatter.formatRuntimeMonitoring(this.applicationService.getRuntimeReport());
       case "runtime-policy":
         return this.responseFormatter.formatRuntimePolicy(this.applicationService.getRuntimeReport());
+      case "artifact-list":
+        return this.responseFormatter.formatArtifactList(await this.applicationService.listArtifacts(repositoryId));
+      case "artifact-search":
+        return this.responseFormatter.formatArtifactSearchResults(
+          query.query,
+          await this.applicationService.searchArtifacts(query.query, repositoryId),
+        );
+      case "artifact-delete":
+        if (!isAdmin) {
+          return this.responseFormatter.formatUnauthorized();
+        }
+        return this.responseFormatter.formatArtifactDeleteResult(query.id, await this.applicationService.deleteArtifact(query.id));
+      case "artifact-rebuild-index":
+        if (!isAdmin) {
+          return this.responseFormatter.formatUnauthorized();
+        }
+        return this.responseFormatter.formatArtifactIndexRebuildResult(await this.applicationService.rebuildArtifactIndex());
     }
   }
 }

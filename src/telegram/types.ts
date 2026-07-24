@@ -28,6 +28,16 @@ export interface OutgoingMessage {
   inlineKeyboard?: InlineKeyboardButton[][];
 }
 
+// Artifact Management: content is always fully buffered before this is
+// built -- an artifact's stored size is bounded by ordinary source-file/diff/
+// log sizes, never large enough to justify streaming the upload itself.
+export interface OutgoingDocument {
+  chatId: number;
+  filename: string;
+  content: Buffer;
+  caption?: string;
+}
+
 // Telegram's own BotCommand shape (setMyCommands/getMyCommands) -- command
 // must match ^[a-z0-9_]{1,32}$ (no hyphens, no leading slash) and
 // description must be 1-256 characters. See TelegramCommands.ts for the
@@ -81,7 +91,20 @@ export type ApplicationQuery =
   | { type: "runtime-status" }
   | { type: "runtime-diagnostics" }
   | { type: "runtime-monitoring" }
-  | { type: "runtime-policy" };
+  | { type: "runtime-policy" }
+  // Artifact Management: the "artifact" command family (/artifact,
+  // /artifact get|search|delete), parsed by CommandParser's own
+  // buildArtifactQuery() -- same closed-subcommand-vocabulary shape as the
+  // "task"/"session" families above. "artifact-get" is handled specially by
+  // TelegramAdapter (it sends the artifact's content as a document, not a
+  // formatted text reply) rather than through the generic handleQuery()
+  // switch every other query type uses; "artifact-delete" is gated behind
+  // TelegramSecurity.isAdmin the same way, at the transport layer, not here.
+  | { type: "artifact-list" }
+  | { type: "artifact-get"; id: string }
+  | { type: "artifact-search"; query: string }
+  | { type: "artifact-delete"; id: string }
+  | { type: "artifact-rebuild-index" };
 
 export type ParsedCommand =
   | { kind: "task"; task: Task; repositoryId?: string }

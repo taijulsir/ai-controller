@@ -1,3 +1,4 @@
+import type { ArtifactMetadata } from "../artifacts";
 import type { Task, TaskExecutionContext, TaskResult, TaskType, WorkflowResult } from "./types";
 
 export interface ITaskWorkflow {
@@ -65,4 +66,14 @@ export interface IUndoableTaskPolicy {
 // resulting pair into an ExecutionCheckpoint itself.
 export interface IUndoCheckpointRecorder {
   capture(repositoryId: string): Promise<string>;
+}
+
+// Artifact Management: purely mechanical, same split as
+// IUndoCheckpointRecorder above -- this has no opinion on which task types
+// are worth persisting, TaskPlanner calls it once per run() after building
+// the final TaskResult and simply attaches whatever comes back. The concrete
+// TaskArtifactRecorder is the one place that decides which task types
+// qualify and what to save for each.
+export interface ITaskArtifactRecorder {
+  record(task: Task, result: TaskResult): Promise<ArtifactMetadata[]>;
 }

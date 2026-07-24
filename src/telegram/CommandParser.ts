@@ -184,6 +184,15 @@ export class CommandParser implements ICommandParser {
       return { kind: "query", query: this.buildSessionQuery(sessionArgTokens.join(" ").toLowerCase()), repositoryId };
     }
 
+    // "artifact" is a command family (bare /artifact, /artifact get|search|
+    // delete) -- handled here the same way "task"/"session" are above. No
+    // trailing repo= scan of its own: none of its subcommands are repo-
+    // scoped the way "task cancel"/"session reset" are (an artifact id is
+    // globally unique, never repository-relative).
+    if (normalizedCommand === "artifact") {
+      return { kind: "query", query: this.buildArtifactQuery(args), repositoryId };
+    }
+
     if (normalizedCommand && QUERY_COMMANDS.has(normalizedCommand)) {
       return { kind: "query", query: this.buildQuery(normalizedCommand, args), repositoryId };
     }
@@ -268,6 +277,34 @@ export class CommandParser implements ICommandParser {
         return { type: "runtime-policy" };
       default:
         throw this.unrecognized("runtime command", subcommand);
+    }
+  }
+
+  // A bare "/artifact" (subcommand === "") lists recent artifacts; "get",
+  // "search", and "delete" are the three other members of the family. An
+  // unrecognized subcommand falls through to the same CommandParseError
+  // every other unrecognized command already throws.
+  private buildArtifactQuery(argsText: string): ApplicationQuery {
+    const tokens = argsText.split(/\s+/).filter((token) => token.length > 0);
+    const subcommand = tokens[0]?.toLowerCase() ?? "";
+    const rest = tokens.slice(1).join(" ");
+
+    switch (subcommand) {
+      case "":
+        return { type: "artifact-list" };
+      case "get":
+        if (!rest) throw new CommandParseError('"artifact get" requires an artifact id, e.g. "artifact get <id>".');
+        return { type: "artifact-get", id: rest };
+      case "search":
+        if (!rest) throw new CommandParseError('"artifact search" requires a query, e.g. "artifact search fix summary".');
+        return { type: "artifact-search", query: rest };
+      case "delete":
+        if (!rest) throw new CommandParseError('"artifact delete" requires an artifact id, e.g. "artifact delete <id>".');
+        return { type: "artifact-delete", id: rest };
+      case "rebuild-index":
+        return { type: "artifact-rebuild-index" };
+      default:
+        throw this.unrecognized("artifact command", subcommand);
     }
   }
 

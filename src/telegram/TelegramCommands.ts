@@ -22,6 +22,7 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "task", description: "Currently running/awaiting-approval task" },
   { command: "undo", description: "Reverse the last implement/fix" },
   { command: "runtime", description: "Background runtime operations report" },
+  { command: "artifact", description: "List, get, or search generated artifacts" },
   { command: "analyze", description: "Ask Claude to analyze the repository" },
   { command: "explain", description: "Ask Claude to explain part of the codebase" },
   { command: "implement", description: "Ask Claude to implement a feature" },

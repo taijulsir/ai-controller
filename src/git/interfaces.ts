@@ -55,4 +55,18 @@ export interface IGitAdapter {
   // in that case, this method never does so itself.
   mergeBranch(ref: string): Promise<void>;
   abortMerge(): Promise<void>;
+
+  // Artifact Management (fix-diff artifacts): unlike diffChangedFiles above,
+  // this returns the full unified patch text, not just path+status -- the
+  // one place this codebase renders a human-readable diff rather than acting
+  // on a machine-readable file list.
+  diff(from: string, to: string): Promise<string>;
+  // Reads one file's content as it existed at a given tree-ish (e.g. an undo
+  // checkpoint's beforeSnapshot/afterSnapshot). Callers must only pass a path
+  // already known (via diffChangedFiles) to exist in treeish -- same
+  // precondition restorePaths() already documents for its own pathspec.
+  // Returns raw bytes, not a string -- a blob may be binary (image, compiled
+  // artifact, anything), and decoding it as text would silently corrupt any
+  // byte sequence that isn't valid UTF-8.
+  readFile(treeish: string, filePath: string): Promise<Buffer>;
 }
