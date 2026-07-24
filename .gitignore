@@ -7,4 +7,4 @@ memory/health.json
 memory/recommendation-state.json
 backups/
 .env
-artifacts/
+/artifacts/
