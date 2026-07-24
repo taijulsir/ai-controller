@@ -98,4 +98,12 @@ export interface ArtifactList {
 export interface ArtifactDeletionResult {
   deletedIds: string[];
   notFoundIds: string[];
+  // A later occurrence of an id already seen earlier in the same request --
+  // reported distinctly from notFoundIds so a caller can tell "you asked
+  // twice" apart from "that id doesn't exist."
+  skippedIds: string[];
+  // Existed in the index but storage removal itself threw (e.g. a disk
+  // error) -- distinct from notFoundIds, and never allowed to abort the
+  // rest of the batch (see ArtifactService.deleteMany's own doc comment).
+  failedIds: string[];
 }

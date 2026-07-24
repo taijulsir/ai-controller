@@ -1,6 +1,13 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
 import type { IApprovalCanceller, IApprovalPendingReader } from "../approval/interfaces";
-import type { ArtifactContent, ArtifactList, ArtifactMetadata, IArtifactMaintenance, IArtifactService } from "../artifacts";
+import type {
+  ArtifactContent,
+  ArtifactDeletionResult,
+  ArtifactList,
+  ArtifactMetadata,
+  IArtifactMaintenance,
+  IArtifactService,
+} from "../artifacts";
 import type { IEngineeringAssistanceEngine } from "../assistance/interfaces";
 import type { RepositoryAssistanceReport } from "../assistance/types";
 import type { IAutonomousPlanningEngine } from "../autonomy/interfaces";
@@ -459,12 +466,19 @@ export class ApplicationService implements IApplicationService {
     return this.artifactService.search(query, repositoryId ? { repositoryId } : {});
   }
 
-  async deleteArtifact(id: string): Promise<boolean> {
-    const existed = await this.artifactService.exists(id);
-    if (existed) {
-      await this.artifactService.delete(id);
+  async deleteArtifacts(ids: string[]): Promise<ArtifactDeletionResult> {
+    return this.artifactService.deleteMany(ids);
+  }
+
+  async deleteAllArtifacts(confirmed: boolean): Promise<{ totalDeleted: number; totalRemaining: number; elapsedMs: number }> {
+    if (!confirmed) {
+      const totalRemaining = (await this.artifactService.list({ limit: 1 })).total;
+      return { totalDeleted: 0, totalRemaining, elapsedMs: 0 };
     }
-    return existed;
+    const startedAt = Date.now();
+    const result = await this.artifactService.deleteByFilter({});
+    const totalRemaining = (await this.artifactService.list({ limit: 1 })).total;
+    return { totalDeleted: result.deletedIds.length, totalRemaining, elapsedMs: Date.now() - startedAt };
   }
 
   async rebuildArtifactIndex(): Promise<{ before: number; after: number; elapsedMs: number }> {

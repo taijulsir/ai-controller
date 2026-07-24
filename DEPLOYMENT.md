@@ -91,9 +91,11 @@ The process needs read access to `config/*.yaml`, and write access to:
 - `artifacts.directory` (`config/controller.yaml`, optional — see
   [CONFIGURATION.md](./CONFIGURATION.md)) — must exist or be creatable; created automatically at
   startup (`createArtifactModule`, which also rebuilds its in-memory index from whatever's
-  already there, so a restart is not a fresh start). No cleanup or retention job runs against
-  it today — every artifact ever saved stays on disk until deleted one at a time via
-  `/artifact delete <id>`, so growth is unbounded over time and worth monitoring.
+  already there, so a restart is not a fresh start). No *automatic* cleanup or retention job
+  runs against it today — every artifact stays on disk until removed manually, via
+  `/artifact delete <id> [id2] ...` for specific artifacts or `/artifact delete-all confirm`
+  to clear everything at once — so growth is unbounded until an operator acts, and worth
+  monitoring.
 - every repository's `path` (`config/repositories.yaml`) — needs whatever access level the
   configured `git`/`claude`/`gh` CLIs need to operate on it (working tree writes, commits,
   pushes to its configured remote)

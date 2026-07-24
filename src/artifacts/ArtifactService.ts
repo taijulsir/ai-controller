@@ -109,22 +109,41 @@ export class ArtifactService implements IArtifactService {
     this.index.remove(id);
   }
 
+  // Artifact lifecycle review: a failure removing one id (e.g. a storage
+  // error) must never abort the rest of the batch or lose track of what
+  // already succeeded -- caught per-id and reported as failedIds instead of
+  // rejecting the whole call. A duplicate id later in the same request is
+  // reported as skippedIds rather than attempted twice.
   async deleteMany(ids: string[]): Promise<ArtifactDeletionResult> {
     const deletedIds: string[] = [];
     const notFoundIds: string[] = [];
+    const skippedIds: string[] = [];
+    const failedIds: string[] = [];
+    const seen = new Set<string>();
 
     for (const id of ids) {
+      if (seen.has(id)) {
+        skippedIds.push(id);
+        continue;
+      }
+      seen.add(id);
+
       const metadata = this.index.get(id);
       if (!metadata) {
         notFoundIds.push(id);
         continue;
       }
-      await this.removeFromStorage(metadata);
-      this.index.remove(id);
-      deletedIds.push(id);
+
+      try {
+        await this.removeFromStorage(metadata);
+        this.index.remove(id);
+        deletedIds.push(id);
+      } catch {
+        failedIds.push(id);
+      }
     }
 
-    return { deletedIds, notFoundIds };
+    return { deletedIds, notFoundIds, skippedIds, failedIds };
   }
 
   // Reuses index.query() -- the same filter-matching path list() uses --

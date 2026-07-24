@@ -1,4 +1,4 @@
-import type { ArtifactList, ArtifactMetadata } from "../artifacts";
+import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../artifacts";
 import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
@@ -750,8 +750,53 @@ export class ResponseFormatter implements IResponseFormatter {
     ].join("\n");
   }
 
-  formatArtifactDeleteResult(id: string, existed: boolean): string {
-    return existed ? `Deleted artifact ${this.code(id)}.` : `No artifact found with id "${this.escapeHtml(id)}"; nothing deleted.`;
+  formatArtifactDeleteResult(result: ArtifactDeletionResult): string {
+    if (
+      result.deletedIds.length === 0 &&
+      result.notFoundIds.length === 0 &&
+      result.skippedIds.length === 0 &&
+      result.failedIds.length === 0
+    ) {
+      return "Nothing to delete.";
+    }
+
+    const lines: string[] = [];
+    this.pushDeletionSection(lines, "Deleted", result.deletedIds);
+    this.pushDeletionSection(lines, "Not found", result.notFoundIds);
+    this.pushDeletionSection(lines, "Skipped (duplicate)", result.skippedIds);
+    this.pushDeletionSection(lines, "Failed", result.failedIds);
+
+    const icon = result.failedIds.length > 0 ? "⚠️" : "🗑️";
+    return this.template(icon, "Artifacts Deleted", lines);
+  }
+
+  private pushDeletionSection(lines: string[], title: string, ids: string[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(`${title} (${ids.length}):`, ...this.truncateBulletList(ids.map((id) => this.code(id))));
+  }
+
+  formatArtifactDeleteAllConfirmation(total: number): string {
+    if (total === 0) {
+      return "No artifacts stored -- nothing to delete.";
+    }
+    return this.template("⚠️", "Confirm Delete All", [
+      `This will permanently delete all ${total} artifact${total === 1 ? "" : "s"}. This cannot be undone.`,
+      "",
+      `Resend as ${this.code("/artifact delete-all confirm")} to proceed.`,
+    ]);
+  }
+
+  formatArtifactDeleteAllResult(result: { totalDeleted: number; totalRemaining: number; elapsedMs: number }): string {
+    return this.template("🗑️", "All Artifacts Deleted", [
+      this.field("Deleted", String(result.totalDeleted)),
+      this.field("Remaining", String(result.totalRemaining)),
+      this.field("Elapsed", `${result.elapsedMs}ms`),
+    ]);
   }
 
   formatArtifactIndexRebuildResult(result: { before: number; after: number; elapsedMs: number }): string {

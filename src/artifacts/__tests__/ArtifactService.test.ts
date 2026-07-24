@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ArtifactIndex } from "../ArtifactIndex";
 import { ArtifactService } from "../ArtifactService";
 import { createArtifactService } from "../index";
+import type { IArtifactStorage } from "../storage/interfaces";
 import type { ArtifactDraft } from "../types";
 import { InMemoryStorage } from "./InMemoryStorage";
 
@@ -115,6 +116,50 @@ describe("ArtifactService (in-memory storage)", () => {
 
     expect(result.deletedIds).toEqual([saved.id]);
     expect(result.notFoundIds).toEqual(["missing"]);
+    expect(result.skippedIds).toEqual([]);
+    expect(result.failedIds).toEqual([]);
+  });
+
+  it("deleteMany reports a repeated id as skipped rather than deleting it twice", async () => {
+    const saved = await service.save(draft());
+    const result = await service.deleteMany([saved.id, saved.id]);
+
+    expect(result.deletedIds).toEqual([saved.id]);
+    expect(result.skippedIds).toEqual([saved.id]);
+    expect(await service.exists(saved.id)).toBe(false);
+  });
+
+  it("deleteMany reports a storage failure as failed without aborting the rest of the batch", async () => {
+    const ok = await service.save(draft());
+    const broken = await service.save(draft({ title: "Broken" }));
+
+    // Delegates every method to the same underlying storage except delete(),
+    // which fails only for keys belonging to `broken` -- simulates e.g. a
+    // permissions error on one artifact's files without affecting the other.
+    const flakyStorage: IArtifactStorage = {
+      save: (key, content) => storage.save(key, content),
+      read: (key) => storage.read(key),
+      exists: (key) => storage.exists(key),
+      list: (prefix) => storage.list(prefix),
+      copy: (sourceKey, destinationKey) => storage.copy(sourceKey, destinationKey),
+      delete: (key) => {
+        if (key.includes(broken.id)) {
+          throw new Error("simulated disk failure");
+        }
+        return storage.delete(key);
+      },
+    };
+    const index = new ArtifactIndex(flakyStorage);
+    await index.rebuild();
+    const serviceOverFlaky = new ArtifactService(flakyStorage, index);
+
+    const result = await serviceOverFlaky.deleteMany([ok.id, broken.id]);
+
+    expect(result.deletedIds).toEqual([ok.id]);
+    expect(result.failedIds).toEqual([broken.id]);
+    // The failed id must still be findable afterward -- deletion must not
+    // have removed it from the index despite the storage error.
+    expect(await serviceOverFlaky.exists(broken.id)).toBe(true);
   });
 
   it("deleteByFilter deletes exactly the matching subset", async () => {

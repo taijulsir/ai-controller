@@ -1,4 +1,4 @@
-import type { ArtifactList, ArtifactMetadata } from "../artifacts";
+import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../artifacts";
 import type { ExecutionResult } from "../controller/types";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
@@ -120,7 +120,16 @@ export interface IResponseFormatter {
   // produces -- distinct from every other format* method here, since this
   // one never becomes a standalone sendMessage text.
   formatArtifactCaption(metadata: ArtifactMetadata): string;
-  formatArtifactDeleteResult(id: string, existed: boolean): string;
+  // Covers both "/artifact delete <id>" and "/artifact delete <id1> <id2>
+  // ..." -- single deletion is just the one-id case of the same result
+  // shape, never a separate format* method.
+  formatArtifactDeleteResult(result: ArtifactDeletionResult): string;
+  // total is the current artifact count, fetched fresh so the prompt always
+  // reflects reality even if artifacts were created/deleted since the last
+  // one -- rendered only when confirmed=false reached this far (i.e. the
+  // user sent a bare "/artifact delete-all").
+  formatArtifactDeleteAllConfirmation(total: number): string;
+  formatArtifactDeleteAllResult(result: { totalDeleted: number; totalRemaining: number; elapsedMs: number }): string;
   formatArtifactIndexRebuildResult(result: { before: number; after: number; elapsedMs: number }): string;
 }
 

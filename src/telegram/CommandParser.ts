@@ -298,9 +298,25 @@ export class CommandParser implements ICommandParser {
       case "search":
         if (!rest) throw new CommandParseError('"artifact search" requires a query, e.g. "artifact search fix summary".');
         return { type: "artifact-search", query: rest };
-      case "delete":
-        if (!rest) throw new CommandParseError('"artifact delete" requires an artifact id, e.g. "artifact delete <id>".');
-        return { type: "artifact-delete", id: rest };
+      case "delete": {
+        const ids = tokens.slice(1);
+        if (ids.length === 0) {
+          throw new CommandParseError(
+            '"artifact delete" requires one or more artifact ids, e.g. "artifact delete <id>" or "artifact delete <id1> <id2> <id3>".',
+          );
+        }
+        return { type: "artifact-delete", ids };
+      }
+      // Deliberately requires the literal "confirm" token, not just a bare
+      // "/artifact delete-all" -- the one command in this family that
+      // deletes without a specific id, so it gets its own explicit,
+      // must-be-typed-out safety gate, the same "no implicit convenience"
+      // philosophy "/merge" already applies to a different kind of
+      // significant operation. CommandParser never performs the deletion
+      // itself either way; confirmed only tells ApplicationService whether
+      // the user actually opted in.
+      case "delete-all":
+        return { type: "artifact-delete-all", confirmed: rest.toLowerCase() === "confirm" };
       case "rebuild-index":
         return { type: "artifact-rebuild-index" };
       default:

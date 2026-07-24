@@ -175,9 +175,10 @@ export class TelegramAdapter implements ITelegramAdapter {
   // all five are different selections over the same RuntimeReport, decided
   // entirely inside ResponseFormatter.
   //
-  // Artifact Management: "artifact-delete"/"artifact-rebuild-index" are the
-  // only two cases that consult isAdmin -- every other case here is exactly
-  // as available to a non-admin authorized user as it always was.
+  // Artifact Management: "artifact-delete"/"artifact-delete-all"/
+  // "artifact-rebuild-index" are the only cases that consult isAdmin --
+  // every other case here is exactly as available to a non-admin authorized
+  // user as it always was.
   private async handleQuery(
     query: Exclude<ApplicationQuery, { type: "artifact-get" }>,
     repositoryId: string | undefined,
@@ -233,7 +234,16 @@ export class TelegramAdapter implements ITelegramAdapter {
         if (!isAdmin) {
           return this.responseFormatter.formatUnauthorized();
         }
-        return this.responseFormatter.formatArtifactDeleteResult(query.id, await this.applicationService.deleteArtifact(query.id));
+        return this.responseFormatter.formatArtifactDeleteResult(await this.applicationService.deleteArtifacts(query.ids));
+      case "artifact-delete-all": {
+        if (!isAdmin) {
+          return this.responseFormatter.formatUnauthorized();
+        }
+        const outcome = await this.applicationService.deleteAllArtifacts(query.confirmed);
+        return query.confirmed
+          ? this.responseFormatter.formatArtifactDeleteAllResult(outcome)
+          : this.responseFormatter.formatArtifactDeleteAllConfirmation(outcome.totalRemaining);
+      }
       case "artifact-rebuild-index":
         if (!isAdmin) {
           return this.responseFormatter.formatUnauthorized();

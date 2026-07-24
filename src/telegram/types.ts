@@ -93,17 +93,28 @@ export type ApplicationQuery =
   | { type: "runtime-monitoring" }
   | { type: "runtime-policy" }
   // Artifact Management: the "artifact" command family (/artifact,
-  // /artifact get|search|delete), parsed by CommandParser's own
-  // buildArtifactQuery() -- same closed-subcommand-vocabulary shape as the
-  // "task"/"session" families above. "artifact-get" is handled specially by
-  // TelegramAdapter (it sends the artifact's content as a document, not a
-  // formatted text reply) rather than through the generic handleQuery()
-  // switch every other query type uses; "artifact-delete" is gated behind
-  // TelegramSecurity.isAdmin the same way, at the transport layer, not here.
+  // /artifact get|search|delete|delete-all|rebuild-index), parsed by
+  // CommandParser's own buildArtifactQuery() -- same closed-subcommand-
+  // vocabulary shape as the "task"/"session" families above. "artifact-get"
+  // is handled specially by TelegramAdapter (it sends the artifact's
+  // content as a document, not a formatted text reply) rather than through
+  // the generic handleQuery() switch every other query type uses;
+  // "artifact-delete"/"artifact-delete-all"/"artifact-rebuild-index" are
+  // gated behind TelegramSecurity.isAdmin the same way, at the transport
+  // layer, not here.
   | { type: "artifact-list" }
   | { type: "artifact-get"; id: string }
   | { type: "artifact-search"; query: string }
-  | { type: "artifact-delete"; id: string }
+  // Always at least one id -- "/artifact delete <id>" and
+  // "/artifact delete <id1> <id2> ..." are the same query shape, single
+  // deletion is just the one-id case of batch deletion, never a second,
+  // near-duplicate query variant.
+  | { type: "artifact-delete"; ids: string[] }
+  // confirmed is false for a bare "/artifact delete-all" -- CommandParser
+  // never performs the deletion itself either way, it only ever reports
+  // what the user typed; ApplicationService decides what an unconfirmed
+  // request does (report a count and refuse, never delete).
+  | { type: "artifact-delete-all"; confirmed: boolean }
   | { type: "artifact-rebuild-index" };
 
 export type ParsedCommand =

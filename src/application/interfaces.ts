@@ -1,5 +1,5 @@
 import type { IRuntimeAdministrationService } from "../admin/interfaces";
-import type { ArtifactContent, ArtifactList, ArtifactMetadata } from "../artifacts";
+import type { ArtifactContent, ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../artifacts";
 import type { RepositoryAssistanceReport } from "../assistance/types";
 import type { AutonomousPlan } from "../autonomy/types";
 import type { IRuntimeControlService } from "../control/interfaces";
@@ -203,8 +203,20 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   searchArtifacts(query: string, repositoryId?: string): Promise<ArtifactList>;
   // Destructive -- TelegramAdapter gates this behind TelegramSecurity.isAdmin
   // before ever calling it, the same way it already gates the mutating
-  // "task cancel"/"undo" surfaces at the transport layer, not here.
-  deleteArtifact(id: string): Promise<boolean>;
-  // Maintenance, not a business query -- same admin gate as deleteArtifact.
+  // "task cancel"/"undo" surfaces at the transport layer, not here. Single
+  // deletion is just the one-id case of this same batch operation -- see
+  // ArtifactService.deleteMany's own doc comment for why a failure removing
+  // one id never aborts the rest.
+  deleteArtifacts(ids: string[]): Promise<ArtifactDeletionResult>;
+  // Deletes every artifact currently in the index (via IArtifactService's
+  // own deleteByFilter({}), the same "reuse the one filter-matching path"
+  // precedent deleteArtifacts/listArtifacts already follow -- never a
+  // second, divergent "delete everything" implementation). confirmed=false
+  // performs no deletion at all and only reports the current total, so a
+  // bare, unconfirmed request can never destroy anything -- TelegramAdapter
+  // never even reaches this method without CommandParser having already
+  // required the literal "confirm" token.
+  deleteAllArtifacts(confirmed: boolean): Promise<{ totalDeleted: number; totalRemaining: number; elapsedMs: number }>;
+  // Maintenance, not a business query -- same admin gate as deleteArtifacts.
   rebuildArtifactIndex(): Promise<{ before: number; after: number; elapsedMs: number }>;
 }

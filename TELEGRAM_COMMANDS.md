@@ -331,13 +331,31 @@ list, retrieve, and (for admins) manage what's already been saved. See
 - **Type**: Manual, read-only. Available to any authorized user.
 - **Example**: `/artifact get 0710a743-e73f-465a-a66a-a197434f07cc`
 
-### `/artifact delete <id>`
-- **What it does**: Permanently deletes one artifact (content and metadata).
+### `/artifact delete <id> [id2] [id3] ...`
+- **What it does**: Permanently deletes one or more artifacts (content and metadata for each).
+  Reports four outcomes separately: deleted, not found, skipped (an id repeated in the same
+  request), and failed (existed but a storage error prevented removal — a failure removing one
+  id never stops the rest of the batch from being attempted).
 - **When to use**: Rarely — there is no automatic retention/cleanup, so this is currently the
-  only way to reclaim space for a specific artifact.
+  only way to reclaim space for specific artifacts.
 - **Type**: Manual, destructive. **Admin-only** — gated by `security.admin_user_id`
   (`config/telegram.yaml`), on top of the usual `allowed_users` check.
 - **Example**: `/artifact delete 0710a743-e73f-465a-a66a-a197434f07cc`
+- **Example (multiple)**: `/artifact delete 0710a743-... ac2dee07-... 6e901075-...`
+
+### `/artifact delete-all [confirm]`
+- **What it does**: Permanently deletes every artifact currently in the index. A bare
+  `/artifact delete-all` performs no deletion — it only reports the current total and asks you
+  to resend with the literal word `confirm`. Only `/artifact delete-all confirm` actually
+  deletes anything.
+- **When to use**: Rarely, and deliberately hard to trigger by accident — e.g. clearing out a
+  test deployment's artifacts before going live, or reclaiming disk space wholesale rather than
+  one id at a time.
+- **Type**: Manual, destructive. **Admin-only**, same gate as `/artifact delete`. The
+  confirmation requirement is enforced by `CommandParser`/`ApplicationService`, not just UI
+  text — an unconfirmed request never reaches the storage layer at all.
+- **Example**: `/artifact delete-all` (shows the count and asks for confirmation)
+- **Example**: `/artifact delete-all confirm` (actually deletes everything)
 
 ### `/artifact rebuild-index`
 - **What it does**: Rebuilds the in-memory artifact index from whatever's actually on disk.
