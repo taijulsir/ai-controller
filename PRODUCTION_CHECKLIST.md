@@ -19,6 +19,9 @@
       immediately with a named error (see [CONFIGURATION.md](./CONFIGURATION.md)).
 - [ ] `config/controller.yaml`'s `memory.directory` and `logging.directory` paths are writable
       by the user that will run the process.
+- [ ] The artifacts directory is writable — `config/controller.yaml`'s `artifacts.directory` if
+      set, otherwise a directory named `artifacts` sibling to `memory.directory` (created
+      automatically on first startup if missing; see [CONFIGURATION.md](./CONFIGURATION.md)).
 
 ## Starting under PM2 (the supervised path — use this in production)
 

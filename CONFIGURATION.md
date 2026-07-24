@@ -53,6 +53,7 @@ memory:
 | `logging.*` | bool/string/string | **validated but not wired to any actual log output** — see [Unused fields](#unused-fields) |
 | `memory.enabled` | boolean | if `false`, `ProjectMemoryService.record()` no-ops entirely |
 | `memory.directory` | string | base directory for both `events.jsonl` and `autonomous-plans.jsonl` |
+| `artifacts.directory` | string, optional | base directory for the Artifact Management store (analyze/review/fix output, fix diffs, original/updated file content). Absent → a directory named `artifacts` sibling to `memory.directory` (e.g. `memory.directory: .../memory` → `.../artifacts`). Created automatically on startup if missing. |
 
 ## `config/claude.yaml`
 

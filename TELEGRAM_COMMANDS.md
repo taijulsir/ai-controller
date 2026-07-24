@@ -301,6 +301,54 @@ individually below.
 
 ---
 
+## Artifact commands
+
+Artifacts are the files `/analyze`, `/review`, and `/fix` generate along the way — a saved copy
+of the analysis/review text, and for `/fix`, a unified diff plus the original and updated
+content of every file it changed. They're created automatically; these commands are how you
+list, retrieve, and (for admins) manage what's already been saved. See
+[CONFIGURATION.md](./CONFIGURATION.md) for where they're stored on disk.
+
+### `/artifact` (or `/artifact list`)
+- **What it does**: Lists the most recently created artifacts (id, type, size, title).
+- **When to use**: To see what's been generated recently, before fetching a specific one.
+- **Type**: Manual, read-only. Available to any authorized user.
+- **Example**: `/artifact`
+
+### `/artifact search <query>`
+- **What it does**: Searches artifact titles and tags (not file content) for the given text.
+- **When to use**: To find a specific artifact when you don't have its id — e.g. by repository
+  or task type, since those are reflected in the title/tags.
+- **Type**: Manual, read-only. Available to any authorized user.
+- **Example**: `/artifact search fix`
+
+### `/artifact get <id>`
+- **What it does**: Sends the artifact's actual content back as a Telegram document (a real
+  file, not inlined text) — the id comes from `/artifact`, `/artifact search`, or the "📎
+  Artifacts" footer on an `/analyze`/`/review`/`/fix` reply.
+- **When to use**: To download a specific generated file — a fix's diff, a changed file's
+  before/after content, or a full analyze/review write-up.
+- **Type**: Manual, read-only. Available to any authorized user.
+- **Example**: `/artifact get 0710a743-e73f-465a-a66a-a197434f07cc`
+
+### `/artifact delete <id>`
+- **What it does**: Permanently deletes one artifact (content and metadata).
+- **When to use**: Rarely — there is no automatic retention/cleanup, so this is currently the
+  only way to reclaim space for a specific artifact.
+- **Type**: Manual, destructive. **Admin-only** — gated by `security.admin_user_id`
+  (`config/telegram.yaml`), on top of the usual `allowed_users` check.
+- **Example**: `/artifact delete 0710a743-e73f-465a-a66a-a197434f07cc`
+
+### `/artifact rebuild-index`
+- **What it does**: Rebuilds the in-memory artifact index from whatever's actually on disk.
+  Normally unnecessary — this already happens automatically on every startup.
+- **When to use**: If the index and the filesystem ever appear to disagree (e.g. after manually
+  editing the artifacts directory, which isn't a supported workflow but this recovers from it).
+- **Type**: Manual, maintenance. **Admin-only**, same gate as `/artifact delete`.
+- **Example**: `/artifact rebuild-index`
+
+---
+
 ## Anything else
 
 Any command not listed above (including a typo of one of these) gets a specific reply —

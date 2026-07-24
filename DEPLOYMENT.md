@@ -17,7 +17,14 @@ A single long-running Node.js process (`node dist/index.js`) that:
 - shells out to `git`, `claude`, and `gh` CLIs as needed against repositories on local disk
 - writes three files under `memory.directory`: two append-only JSONL logs (`events.jsonl`,
   `autonomous-plans.jsonl`) and one small heartbeat file (`health.json`, overwritten every
-  minute) — nothing else touches disk at runtime besides reading `config/*.yaml`
+  minute)
+- writes generated artifacts (analyze/review output, fix diffs, original/updated file content)
+  under a separate `artifacts.directory` (`config/controller.yaml`, optional — defaults to a
+  directory named `artifacts` sibling to `memory.directory`), one file plus a `.meta.json`
+  sidecar per artifact, organized `YYYY/MM/DD/<id>.<ext>` — see
+  [Filesystem requirements](#filesystem-requirements) and
+  [Backup guidance](#backup-guidance) below. Nothing else touches disk at runtime besides
+  reading `config/*.yaml`.
 
 There is still no HTTP server and no database — the health-check mechanism (below) is
 file-based, deliberately, rather than adding a network port.
@@ -81,6 +88,12 @@ There is no health data before the first tick completes (up to 60s after startup
 The process needs read access to `config/*.yaml`, and write access to:
 - `memory.directory` (`config/controller.yaml`) — must exist or be creatable; written to by
   `ProjectMemoryService`, `AutonomousPlanHistoryService`, and now `HealthCheckWorker`
+- `artifacts.directory` (`config/controller.yaml`, optional — see
+  [CONFIGURATION.md](./CONFIGURATION.md)) — must exist or be creatable; created automatically at
+  startup (`createArtifactModule`, which also rebuilds its in-memory index from whatever's
+  already there, so a restart is not a fresh start). No cleanup or retention job runs against
+  it today — every artifact ever saved stays on disk until deleted one at a time via
+  `/artifact delete <id>`, so growth is unbounded over time and worth monitoring.
 - every repository's `path` (`config/repositories.yaml`) — needs whatever access level the
   configured `git`/`claude`/`gh` CLIs need to operate on it (working tree writes, commits,
   pushes to its configured remote)
@@ -203,8 +216,14 @@ Neither file (nor `health.json`) is required for the application to start — a 
 treated as "no history yet," not an error.
 
 `config/*.yaml` should be backed up/version-controlled like any other configuration — `.env`
-should be backed up separately and encrypted at rest, since it holds the bot token. Neither is
-covered by `scripts/backup-memory.sh`, which only touches `memory.directory`.
+should be backed up separately and encrypted at rest, since it holds the bot token. None of
+these are covered by `scripts/backup-memory.sh`, which only touches `memory.directory`.
+
+`artifacts.directory` is likewise **not** covered by `scripts/backup-memory.sh` — generated
+analyze/review/fix output, fix diffs, and original/updated file content live there and nowhere
+else. Losing it loses that history (though not repository state itself — every fix artifact is
+a copy of content git already has, not the only copy). Back it up the same way if you want that
+history to survive a disk loss.
 
 ## Recovery procedures
 

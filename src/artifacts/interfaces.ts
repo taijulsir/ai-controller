@@ -28,8 +28,8 @@ export interface IArtifactService {
 // operational/maintenance action (storage abstraction review, Phase 10),
 // not something ordinary consumers should be able to trigger. Only the
 // composition root (createArtifactModule in ./index.ts) hands this out,
-// and only to the one caller that specifically needs it (the temporary
-// Telegram admin verification commands' "/artifact rebuild-index").
+// and only to the one caller that specifically needs it (ApplicationService,
+// which exposes it to Telegram as the admin-only "/artifact rebuild-index").
 export interface IArtifactMaintenance {
   rebuildIndex(): Promise<void>;
 }
