@@ -6,6 +6,8 @@ import type { IRuntimeControlService } from "../control/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
+import type { ConflictResolutionOutcome } from "../gitengines/types";
+import type { InProgressOperationKind, RepositoryHealthReport } from "../git/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
@@ -16,6 +18,7 @@ import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
 import type { AutonomousPlanSchedulingReport } from "../scheduling/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
+import type { RecoveryOutcome } from "../recovery/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { RuntimeStatus } from "../status/types";
@@ -219,4 +222,27 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   deleteAllArtifacts(confirmed: boolean): Promise<{ totalDeleted: number; totalRemaining: number; elapsedMs: number }>;
   // Maintenance, not a business query -- same admin gate as deleteArtifacts.
   rebuildArtifactIndex(): Promise<{ before: number; after: number; elapsedMs: number }>;
+
+  // Git Orchestration redesign: /health -- a direct, read-only view of
+  // Git Health Service's own report, no synthesis of its own.
+  getRepositoryHealth(repositoryId?: string): Promise<RepositoryHealthReport>;
+  // /recover -- builds a RecoveryPlan from the live health report via
+  // Recovery Planner and, when one exists, executes it immediately through
+  // Repository Recovery Workflow (which gates its own irreversible/
+  // approval-required steps itself, and re-validates state before running
+  // per RecoveryPlan.reValidateBeforeExecution). "nothing-to-recover" is
+  // itself a normal, renderable outcome, not an error -- the same
+  // "undefined/absence is a fact, not a failure" pattern this class already
+  // follows for getCurrentTask().
+  recoverRepository(repositoryId?: string): Promise<RecoveryOutcome | { kind: "nothing-to-recover" }>;
+  // /resume -- analyzes any in-progress merge/rebase's conflicts via
+  // Conflict Resolution Engine and attempts auto-resolution; "nothing to
+  // resume" when the repository isn't actually mid-merge/mid-rebase at all.
+  resumeRepositoryOperation(repositoryId?: string): Promise<ConflictResolutionOutcome | { kind: "nothing-to-resume" }>;
+  // /abort -- unconditionally aborts whatever merge/rebase/cherry-pick/
+  // revert/bisect is currently in progress, via the matching native git
+  // abort command. Distinct from /recover: no plan, no approval gate, no
+  // re-validation step -- the direct, fast "just get me out of this state"
+  // escape hatch Recovery Planner's own multi-step plans are not.
+  abortRepositoryOperation(repositoryId?: string): Promise<{ kind: "aborted"; operation: InProgressOperationKind } | { kind: "nothing-to-abort" }>;
 }

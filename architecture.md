@@ -45,9 +45,14 @@
 ## Layered dependency graph
 
 Verified acyclic (zero real, value-level circular imports found via a full graph traversal)
-across all 46 `src/` modules (44 from the original phases, plus Stage 4's `src/startup/`, plus
-`src/executionstate/` and `src/undo/` from the Undo/Task Cancellation phase), not just the
-original execution pipeline:
+across all 52 `src/` modules (44 from the original phases, plus Stage 4's `src/startup/`, plus
+`src/executionstate/` and `src/undo/` from the Undo/Task Cancellation phase, plus six new
+modules from the Git Orchestration redesign: `gitstate`, `journal`, `gittransaction`,
+`gitengines`, `gitorchestration`, `recovery`), not just the original execution pipeline.
+`gitorchestration` and `recovery` reference each other's interfaces
+(`IApprovalGate`/`IRecoveryPlanner`) but only via `import type` — erased entirely at compile
+time, so this is a type-only mutual reference, not a real cycle, the same distinction the
+pre-existing acyclicity claim already relied on for every other module pair here:
 
 ```mermaid
 flowchart TB
@@ -60,9 +65,20 @@ flowchart TB
     session
     controller --> executionstate
     git & executionstate & memory & repositories --> undo
+
+    git --> gitstate
+    git & journal & repositories --> gittransaction
+    git & gitstate & repositories --> recovery
+    journal & recovery --> gitorchestration
+    git & journal & gittransaction & gitorchestration & repositories --> gitengines
+    gitorchestration & gitengines & gittransaction & journal --> planner
+    gitorchestration --> undo
+    gitorchestration --> telegram
+
     intelligence & memory --> decisions
     intelligence & memory --> context
     intelligence & memory & decisions & session & repositories & executionstate & undo --> application
+    git & recovery & gitengines & undo --> application
 
     decisions --> recommendations --> assistance
     intelligence & decisions & session & context --> strategy --> planning --> coordination
@@ -91,7 +107,7 @@ flowchart TB
 
 *(This diagram groups related low-traffic modules for readability — `status`, `control`,
 `admin`, `diagnostics`, `reporting` are the runtime-operations cluster described in
-[SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#runtime-operations-surface); the full 44-module edge
+[SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#runtime-operations-surface); the full 52-module edge
 list is larger than is useful to render directly.)*
 
 - **`domain`** — the shared `Repository` type used by every module above it.
@@ -104,10 +120,44 @@ list is larger than is useful to render directly.)*
 - **`git` / `claude` / `github`** — one adapter per external process (`git`, `claude`, `gh`
   CLI), each the sole owner of shelling out to that tool. All three use array-argument
   `execFile`/`spawn` (never a shell string), so no command-injection risk exists even though
-  prompt/message/title text can originate from user-controlled Telegram input.
+  prompt/message/title text can originate from user-controlled Telegram input. `git` also now
+  hosts `GitHealthService` (builds a `RepositoryHealthReport` — branch/upstream/in-progress-
+  operation/locks/worktrees/submodules/etc, via parallel `GitAdapter` calls plus `.git`
+  marker-file checks) and `RepositorySnapshotService` (a thin, shared delegate over
+  `GitAdapter`'s own snapshot/diff/restore plumbing — Git Orchestration redesign).
+- **`gitstate`** — pure, zero-I/O: `GitStateMachine` (a frozen legal-transition table over
+  `RepositoryState`) and `RepositoryStateAnalyzer` (classifies a `RepositoryHealthReport` into
+  one `RepositoryState`, priority-ordered: interrupted > in-progress > detached > diverged >
+  dirty > clean). Neither performs I/O or makes a safety judgment itself.
+- **`journal`** — `OperationJournal`/`FilesystemJournalStorage`: an append-only, one-JSONL-
+  file-per-repository audit trail for every git-native mutating command, mirroring
+  `src/artifacts/storage`'s own storage-abstraction split. No dependency on any other new
+  module — a standalone Foundation primitive.
+- **`gittransaction`** — `GitTransactionManager`: wraps a mutating git operation as
+  capture-before → attempt → commit-or-rollback, journaling every step. Three rollback
+  mechanisms (`reset-hard`/`reset-soft`/`restore-tree`), chosen per operation by its caller —
+  never a judgment this class makes itself.
+- **`recovery`** — `RecoveryPlanner` (pure: a `RepositoryHealthReport` in any non-normal state
+  → an ordered `RecoveryPlan` of specific, risk-classified steps) and
+  `RepositoryRecoveryWorkflow` (executes one, re-validating live state matches the plan's
+  `detectedState` first, gating irreversible/approval-required steps).
+- **`gitorchestration`** — `CommandOrchestrator`, the single gate every git-native command
+  routes through: health check → `AutomaticSafetyPolicies.classify()` → recovery
+  short-circuit → `PreflightValidationPolicy.validate()` → approval gate → the caller's own
+  `run()`. `DeferredApprovalGate` is the construction-order seam bound to the real
+  `ApprovalGateAdapter` (in `telegram`) once it exists, the same pattern `approval`'s own
+  `Deferred*` seams already use.
+- **`gitengines`** — `IntelligentSyncEngine`/`RebaseEngine`/`MergeEngine`/
+  `ConflictResolutionEngine`: the actual git mechanics for `/sync`/`/rebase`/`/merge`/`/resume`,
+  each opening and owning its own `gittransaction` Transaction. `IntelligentSyncEngine`
+  reconciles genuine divergence per the configured strategy instead of refusing outright — the
+  direct fix for the two most-cited original problems (divergence forced a manual `/merge`;
+  conflicts had no guided resolution path).
 - **`planner`** — `TaskPlanner` dispatches a `Task` to one small workflow class per task
   type, built by `WorkflowFactory`. Enforces `ControllerConfig.task`'s concurrency limit and
-  per-task timeout. See [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#task-types-and-workflows).
+  per-task timeout. Every git-native workflow now routes through `gitorchestration`'s Command
+  Orchestrator rather than hand-rolling its own preconditions. See
+  [EXECUTION_PIPELINE.md](./EXECUTION_PIPELINE.md#task-types-and-workflows).
 - **`controller`** — `ControllerCore` is the single entry point that actually executes a
   `Task` or a workflow: resolve the repository, delegate to `TaskPlanner` or
   `WorkflowOrchestrator`, return an `ExecutionResult`.
@@ -122,7 +172,11 @@ list is larger than is useful to render directly.)*
 - **`telegram`** — `TelegramAdapter` parses a message into a pipeline/query request, submits
   execution requests to `IExecutionPipeline`, submits queries to `IApplicationService`, and
   sends the formatted result back. Knows nothing about git, Claude, YAML, or the planner's
-  internals. See [TELEGRAM.md](./TELEGRAM.md).
+  internals. See [TELEGRAM.md](./TELEGRAM.md). Also hosts `ApprovalGateAdapter` — bridges
+  `gitorchestration`'s `IApprovalGate` to a new, narrow `requestGateApproval()` method on
+  `TelegramApprovalProvider` (reusing its existing pending-map/timeout machinery, not a second
+  approval mechanism) — the one place `telegram` depends on `gitorchestration`, never the
+  reverse.
 - **`intelligence`** — `RepositoryIntelligenceService` builds a `RepositorySnapshot`
   concurrently via `Promise.allSettled` over `GitAdapter.status()`, `GitAdapter.getRecentCommits()`,
   and `GithubAdapter.listOpenPullRequests()` — a failure in any one source degrades only that
@@ -146,7 +200,10 @@ list is larger than is useful to render directly.)*
 - **`undo`** — `UndoService` reverses the most recent `implement-feature`/`fix-bug` task's
   file changes only, using `GitAdapter`'s snapshot/diff/restore plumbing plus the same
   execution-state and project-memory facts every other read-side query already uses. See
-  [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#undo-architecture) for the full two-phase flow.
+  [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#undo-architecture) for the full two-phase flow. Now
+  joined by `SafeUndoFramework`, the ref-based sibling that reverses a git-native operation via
+  `journal`'s own audit trail instead — `ApplicationService.undoLastExecution()` compares both
+  plans' timestamps and acts on whichever is more recent.
 - **`decisions`** — `DecisionEngine.analyze()` combines a repository's snapshot and recent
   `ProjectMemoryEvent`s into 9 typed `Insight` kinds. See
   [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#decisionengine--insight-catalogue) for the full table.
@@ -159,7 +216,10 @@ list is larger than is useful to render directly.)*
 - **`application`** — `ApplicationService` is the read-only query facade: it never implements
   `IControllerCore` and never calls `execute()`. It fans out to `intelligence`/`memory`/
   `decisions`/`session`/the autonomous-planning cluster/the runtime-operations cluster for
-  every read-side Telegram command.
+  every read-side Telegram command. `/health`, `/recover`, `/resume`, and the git-native half
+  of `/undo` are the exceptions to "read-only query facade" in the same sense `/undo`,
+  `/session reset/stop`, and `/task cancel` already were — each answers a query-shaped request
+  but also performs a narrowly-scoped write (via `git`/`recovery`/`gitengines`/`undo`).
 - **`strategy` / `planning` / `coordination` / `pipeline`** — the decision-support stack that
   turns a `Task` into a `TaskExecutionStrategy` (`StrategyEngine`), an `ExecutionPlan`
   (`PlanningEngine`), and a `CapabilityProgram` (`ExecutionCoordinator`), which

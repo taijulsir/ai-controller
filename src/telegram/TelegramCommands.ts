@@ -20,7 +20,10 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "recommendations", description: "Current ranked recommendations" },
   { command: "session", description: "Claude session status" },
   { command: "task", description: "Currently running/awaiting-approval task" },
-  { command: "undo", description: "Reverse the last implement/fix" },
+  // Git Orchestration redesign: now reverses whichever is more recent -- a
+  // Claude-editing task or a git-native operation (sync/merge/rebase/
+  // commit/push/branch/discard) -- not implement/fix alone.
+  { command: "undo", description: "Reverse the last change" },
   { command: "runtime", description: "Background runtime operations report" },
   { command: "artifact", description: "List, get, or search generated artifacts" },
   { command: "analyze", description: "Ask Claude to analyze the repository" },
@@ -33,7 +36,15 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "commit", description: "Stage and commit all changes" },
   { command: "push", description: "Push the current branch" },
   { command: "fetch", description: "Fetch from the remote" },
-  { command: "sync", description: "Fast-forward the current branch" },
+  // Git Orchestration redesign: now reconciles divergence automatically
+  // (rebase/merge/ask, per configuration) instead of only fast-forwarding.
+  { command: "sync", description: "Sync the current branch with its upstream" },
   { command: "merge", description: "Merge a branch into the current one" },
+  { command: "rebase", description: "Rebase the current branch onto another" },
+  { command: "discard", description: "Discard all uncommitted changes" },
+  { command: "recover", description: "Recover from an interrupted git state" },
+  { command: "health", description: "Repository health report" },
+  { command: "resume", description: "Resume an in-progress merge or rebase" },
+  { command: "abort", description: "Abort the in-progress merge or rebase" },
   { command: "ship", description: "Commit, push, and open a pull request" },
 ];

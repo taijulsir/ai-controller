@@ -179,6 +179,10 @@ data another method already computed in the same call. Full method list:
 | `getCurrentTask` | `CurrentTaskReport \| undefined` (`/task`) |
 | `cancelCurrentTask` | `TaskCancellationOutcome` — see [Task cancellation](#task-cancellation) (`/task cancel`) |
 | `undoLastExecution` | `Promise<UndoOutcome>` — see [Undo architecture](#undo-architecture) (`/undo`) |
+| `getRepositoryHealth` | `Promise<RepositoryHealthReport>` — a direct `GitHealthService` pass-through (`/health`) |
+| `recoverRepository` | `Promise<RecoveryOutcome \| {kind:"nothing-to-recover"}>` — builds a plan via `RecoveryPlanner` and runs it immediately via `RepositoryRecoveryWorkflow` (`/recover`) |
+| `resumeRepositoryOperation` | `Promise<ConflictResolutionOutcome \| {kind:"nothing-to-resume"}>` — via `ConflictResolutionEngine` (`/resume`) |
+| `abortRepositoryOperation` | `Promise<{kind:"aborted", operation} \| {kind:"nothing-to-abort"}>` — the fast escape hatch, no plan, no approval gate (`/abort`) |
 | `getRecommendations` | `RepositoryRecommendationReport` |
 | `getEngineeringAssistance` | `RepositoryAssistanceReport` |
 | `getEngineeringWorkspace` | `EngineeringWorkspace` — the "everything at once" composed view: snapshot + insights + recommendations + assistance + session + recent history + attention events (if a monitor was wired) |
@@ -380,9 +384,16 @@ cancelling, it only aborts the matching controller if one exists.
 
 ## Undo architecture
 
-`/undo` reverses the most recent **file-editing** task only — `implement-feature` and
-`fix-bug` (`UndoableTaskPolicy`); deterministic git operations (commit/push/PR/branch/merge)
-are a distinct concern, explicitly out of scope for `/undo`.
+`/undo` now spans two independent mechanisms, arbitrated by `ApplicationService.undoLastExecution()`.
+The tree-content one below (`UndoService`) still reverses only a **file-editing** task —
+`implement-feature` and `fix-bug` (`UndoableTaskPolicy`). The Git Orchestration redesign added
+a ref-based sibling, `SafeUndoFramework`, that reverses the last **git-native** operation
+instead (`/sync`, `/merge`, `/rebase`, `/commit`, `/push`, `/branch`, `/discard`) — see
+[Git-native undo](#git-native-undo-safeundoframework) below. Both plans are built in parallel;
+`ApplicationService` compares `UndoPlan.capturedAt` against `GitUndoPlan.recordedAt` and acts on
+whichever is more recent, with one hard override: `UndoService.buildUndoPlan()` reporting
+`"execution-in-progress"` (a Claude-editing task is actively running right now) always wins,
+regardless of either timestamp.
 
 **Checkpointing.** `TaskPlanner` captures a git tree snapshot (`GitAdapter.createSnapshot()`,
 via `UndoCheckpointRecorder`) both immediately before and immediately after every undoable
@@ -410,6 +421,29 @@ depth.
 An undo failure (e.g. `restorePaths` itself throwing) propagates as a normal thrown error up to
 the Telegram layer — only the three named non-error outcomes above (`nothing-to-undo`,
 `execution-in-progress`, `drift-detected`) are handled as expected, formatted results.
+
+### Git-native undo (`SafeUndoFramework`)
+
+Reads the Operation Journal (`journal`) rather than an `ExecutionCheckpoint` — same two-phase
+split as `IUndoService` above, for the same reasons.
+
+1. `buildUndoPlan()` — finds the most recent `Completed` journal entry for the repository. An
+   entry recorded with `rollbackStrategy: "read-only"` (fetch) means nothing to reverse
+   (`undefined`). Otherwise the plan's `strategy` is the entry's own persisted
+   `rollbackStrategy`, read straight off the entry — never re-derived from its operation type
+   alone (a `commit`'s correct undo is `reset-soft`, a `sync`'s is `reset-hard`; both are the
+   same `JournalOperationType` category in other respects, so only the persisted, per-entry
+   value is trustworthy). `requiresApproval` is true only for
+   `"revert-and-force-push-with-lease"` (an already-pushed operation) — the one floor Safe Undo
+   Framework enforces regardless of `approval.require_before`.
+2. `executeUndoPlan()` — re-fetches the full journal entry by id, requests approval first if
+   required (refusing via `AlreadyPushedError` if declined), then dispatches on the entry's
+   `rollbackStrategy`: `reset-hard`/`reset-soft` via `GitAdapter`; `restore-tree` via the same
+   snapshot-diff-restore sequence `GitTransactionManager.rollback()` itself uses (invoked later,
+   from a separate `/undo` request, rather than from within the original Transaction's own
+   `rollback()` closure); `delete-branch`/`switch-back-to-branch` via `entry.metadata.branch`/
+   `.previousBranch`; `revert-and-force-push-with-lease` via `GitAdapter.revertCommit()` then
+   `forcePushWithLease()`. Marks the entry `RolledBack` on success.
 
 ## Runtime operations surface
 

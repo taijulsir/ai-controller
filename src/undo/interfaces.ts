@@ -1,4 +1,4 @@
-import type { UndoOutcome, UndoPlan } from "./types";
+import type { GitUndoPlan, UndoOutcome, UndoPlan } from "./types";
 
 // Two-phase by design: phase 1 (buildUndoPlan) is pure analysis -- it reads
 // ExecutionStateTracker, project memory history, and git, but never mutates
@@ -14,4 +14,13 @@ export interface IUndoService {
   // Callers must only pass a plan with status "ready" (canUndo === true) --
   // see CannotExecuteUndoPlanError.
   executeUndoPlan(plan: UndoPlan): Promise<UndoOutcome>;
+}
+
+// The ref-based sibling to IUndoService -- reverses a git-native mutation
+// (commit/merge/rebase/sync/push/branch) via the Operation Journal, not a
+// Claude-editing task's tree snapshot. Same two-phase build/execute split as
+// IUndoService, for the same reasons.
+export interface ISafeUndoFramework {
+  buildUndoPlan(repositoryId: string): Promise<GitUndoPlan | undefined>;
+  executeUndoPlan(plan: GitUndoPlan): Promise<void>;
 }

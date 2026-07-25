@@ -233,6 +233,12 @@ export class StrategyEngine implements IExecutionStrategyEngine {
       case "create-branch":
       case "sync":
       case "merge":
+      // rebase/discard: same reasoning and same unreachable-in-practice
+      // status as sync/merge above (both are bypass-eligible, added to
+      // BYPASS_TASK_TYPES alongside them) -- they mutate git state, so they
+      // stay grouped here rather than with the read-only AnalyzeFirst set.
+      case "rebase":
+      case "discard":
         return "ShipChanges";
       case "analyze-repository":
       case "explain-code":

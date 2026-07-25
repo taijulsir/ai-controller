@@ -54,6 +54,14 @@ memory:
 | `memory.enabled` | boolean | if `false`, `ProjectMemoryService.record()` no-ops entirely |
 | `memory.directory` | string | base directory for both `events.jsonl` and `autonomous-plans.jsonl` |
 | `artifacts.directory` | string, optional | base directory for the Artifact Management store (analyze/review/fix output, fix diffs, original/updated file content). Absent → a directory named `artifacts` sibling to `memory.directory` (e.g. `memory.directory: .../memory` → `.../artifacts`). Created automatically on startup if missing. |
+| `git_orchestration.divergence_strategy` | `"rebase"` \| `"merge"` \| `"ask"`, optional | how `/sync` reconciles a diverged branch. Absent → `"rebase"`. `"ask"` sends an approval prompt before reconciling at all. |
+| `git_orchestration.conflict_resolution.auto_resolve_trivial` | boolean, optional | reserved for future use — trivial (whitespace-only) conflict auto-resolution is currently always on and not yet gated by this field. |
+| `git_orchestration.journal.directory` | string, optional | base directory for the Operation Journal (one JSONL file per repository, audit trail for every git-native mutating command). Absent → a directory named `git-journal` sibling to `memory.directory`. Created automatically on first write. |
+
+Whole `git_orchestration` section is optional — every default above applies when it's absent
+entirely, so no existing `config/controller.yaml` needs to change to keep working. Note
+`/rebase` always requires approval regardless of `approval.require_before` — this floor is a
+code constant (`AutomaticSafetyPolicies`), not something any config file can turn off.
 
 ## `config/claude.yaml`
 

@@ -1,3 +1,4 @@
+import type { JournalOperationType, JournalRollbackStrategy } from "../journal/types";
 import type { TaskType } from "../planner/types";
 
 export type UndoPlanStatus = "ready" | "nothing-to-undo" | "execution-in-progress" | "drift-detected";
@@ -34,10 +35,41 @@ export interface UndoPlan {
   // actually perform the restore. Not meant for display; ResponseFormatter
   // never reads this field.
   beforeSnapshot?: string;
+  // Present whenever a checkpoint was found (drift-detected/ready), absent
+  // for nothing-to-undo/execution-in-progress. /undo's single command
+  // surface (ApplicationService.undoLastExecution()) compares this against
+  // GitUndoPlan.recordedAt below to decide which of the two undo mechanisms
+  // -- this tree-content one, or Safe Undo Framework's ref-based one -- is
+  // actually the most recent undoable thing for the repository.
+  capturedAt?: Date;
+}
+
+// The ref-based sibling to UndoPlan above -- reverses a git-native mutation
+// via the Operation Journal, not a Claude-editing task's tree snapshot.
+// `strategy` reuses JournalRollbackStrategy directly (see its doc comment in
+// src/journal/types.ts) rather than a second, parallel enum: the mechanism
+// that undoes a given JournalEntry is always exactly the one it was
+// recorded with, read straight off the entry, never re-derived from its
+// operation type.
+export interface GitUndoPlan {
+  journalEntryId: string;
+  operation: JournalOperationType;
+  strategy: JournalRollbackStrategy;
+  // true whenever the operation already reached the remote (a push) -- the
+  // one case Safe Undo Framework refuses to act on without explicit approval.
+  requiresApproval: boolean;
+  // The JournalEntry's own completedAt (or startedAt, for the rare case a
+  // completed entry somehow has no completedAt) -- the git-native sibling of
+  // UndoPlan.capturedAt above, compared against it to decide which undo
+  // mechanism actually reflects the repository's most recent change.
+  recordedAt: Date;
 }
 
 export type UndoOutcome =
   | { kind: "nothing-to-undo" }
   | { kind: "execution-in-progress" }
   | { kind: "drift-detected"; checkpointId: string; taskType: TaskType; conflictingFiles: string[] }
-  | { kind: "undone"; checkpointId: string; taskType: TaskType; restoredFiles: string[]; deletedFiles: string[] };
+  | { kind: "undone"; checkpointId: string; taskType: TaskType; restoredFiles: string[]; deletedFiles: string[] }
+  // /undo's git-native outcome, produced when Safe Undo Framework's plan was
+  // the more recent of the two (see ApplicationService.undoLastExecution()).
+  | { kind: "git-undone"; operation: JournalOperationType };

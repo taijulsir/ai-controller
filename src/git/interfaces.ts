@@ -1,4 +1,4 @@
-import type { CommitSummary, GitFileChange, GitStatus } from "./types";
+import type { CommitSummary, GitFileChange, GitStatus, RepositoryHealthReport, SubmoduleStatus, WorktreeInfo } from "./types";
 
 export interface IGitAdapter {
   status(): Promise<GitStatus>;
@@ -69,4 +69,63 @@ export interface IGitAdapter {
   // artifact, anything), and decoding it as text would silently corrupt any
   // byte sequence that isn't valid UTF-8.
   readFile(treeish: string, filePath: string): Promise<Buffer>;
+
+  // Phase 0 freeze -- Git Health Service primitives. Every one is read-only
+  // (or, below the "mutating primitives" comment, mechanical and
+  // judgment-free the same way createBranch()/checkout() already are);
+  // GitAdapter still never decides whether an operation is safe -- that
+  // stays with Pre-flight Validation / the calling Engine.
+  headSha(): Promise<string>;
+  // Absolute path to the real git directory -- resolves worktrees/submodules
+  // correctly, never assumes ".git" is a plain directory under the repo root.
+  gitDir(): Promise<string>;
+  hasUpstreamConfigured(branch: string): Promise<boolean>;
+  // undefined when no upstream is configured, or it's configured but no
+  // longer resolves (its remote branch was deleted).
+  upstreamRef(): Promise<string | undefined>;
+  stashCount(): Promise<number>;
+  listWorktrees(): Promise<WorktreeInfo[]>;
+  listSubmodules(): Promise<SubmoduleStatus[]>;
+  isShallowRepository(): Promise<boolean>;
+  // true when `git fsck` reported no errors.
+  fsck(): Promise<{ clean: boolean; output: string }>;
+
+  // Mutating primitives -- each backs exactly one Engine/Framework operation
+  // named in the approved review; still purely mechanical, no precondition
+  // checks of their own.
+  rebase(ontoRef: string): Promise<void>;
+  abortRebase(): Promise<void>;
+  continueRebase(): Promise<void>;
+  abortCherryPick(): Promise<void>;
+  abortRevert(): Promise<void>;
+  abortBisect(): Promise<void>;
+  cleanWorkingTree(): Promise<void>;
+  resetHard(ref: string): Promise<void>;
+  resetSoft(ref: string): Promise<void>;
+  deleteBranch(branch: string): Promise<void>;
+  forcePushWithLease(): Promise<void>;
+  revertCommit(ref: string): Promise<void>;
+
+  commitNoEdit(): Promise<void>;
+  countCommitsBetween(from: string, to: string): Promise<number>;
+  listConflictedFiles(): Promise<string[]>;
+  // Path -> true when the conflicted blob is binary (see GitConstants'
+  // conflictedFilesNumstat doc comment for the detection method).
+  conflictedFilesAreBinary(): Promise<Map<string, boolean>>;
+}
+
+export interface IGitHealthService {
+  getHealth(repositoryId?: string): Promise<RepositoryHealthReport>;
+}
+
+// Deviation from the Phase 0 freeze, noted in the implementation report:
+// diff()/restore() gained a repositoryId parameter capture() already had --
+// omitting it there was an oversight (this service, like every other
+// Foundation component, is one shared instance across every repository, not
+// one instance per repository), not an intentional design choice worth
+// preserving verbatim.
+export interface IRepositorySnapshotService {
+  capture(repositoryId: string): Promise<string>;
+  diff(repositoryId: string, fromRef: string, toRef: string): Promise<GitFileChange[]>;
+  restore(repositoryId: string, fromRef: string, filesToRestore: string[], filesToDelete: string[]): Promise<void>;
 }

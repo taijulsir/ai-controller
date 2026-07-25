@@ -48,6 +48,23 @@ export interface ControllerConfig {
   artifacts?: {
     directory: string;
   };
+
+  // Optional: absent means every default below applies (rebase-first
+  // divergence handling, trivial-conflict auto-resolution on, journal
+  // directory sibling to memory.directory) -- no existing
+  // config/controller.yaml needs to change to keep working.
+  git_orchestration?: {
+    divergence_strategy?: "rebase" | "merge" | "ask";
+    conflict_resolution?: {
+      auto_resolve_trivial?: boolean;
+    };
+    journal?: {
+      directory?: string;
+    };
+    // Deliberately no always_require_approval key here -- see
+    // AutomaticSafetyPolicies' own doc comment for why that floor is a code
+    // constant, never a config value.
+  };
 }
 
 export interface ClaudeConfig {

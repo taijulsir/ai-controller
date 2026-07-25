@@ -115,6 +115,39 @@ export function validateControllerConfig(
     }
   }
 
+  // Optional -- see ControllerConfig.git_orchestration's own doc comment for
+  // the defaults that apply when this section is absent entirely.
+  if (data.git_orchestration !== undefined) {
+    const gitOrchestration = data.git_orchestration;
+    if (!isObject(gitOrchestration)) {
+      issues.push('"git_orchestration" section must be an object when present');
+    } else {
+      if (
+        gitOrchestration.divergence_strategy !== undefined &&
+        !["rebase", "merge", "ask"].includes(gitOrchestration.divergence_strategy as string)
+      ) {
+        issues.push('"git_orchestration.divergence_strategy" must be one of "rebase", "merge", "ask" when present');
+      }
+      if (gitOrchestration.conflict_resolution !== undefined) {
+        if (!isObject(gitOrchestration.conflict_resolution)) {
+          issues.push('"git_orchestration.conflict_resolution" must be an object when present');
+        } else if (
+          gitOrchestration.conflict_resolution.auto_resolve_trivial !== undefined &&
+          !isBoolean(gitOrchestration.conflict_resolution.auto_resolve_trivial)
+        ) {
+          issues.push('"git_orchestration.conflict_resolution.auto_resolve_trivial" must be a boolean when present');
+        }
+      }
+      if (gitOrchestration.journal !== undefined) {
+        if (!isObject(gitOrchestration.journal)) {
+          issues.push('"git_orchestration.journal" section must be an object when present');
+        } else if (gitOrchestration.journal.directory !== undefined && !isString(gitOrchestration.journal.directory)) {
+          issues.push('"git_orchestration.journal.directory" must be a string when present');
+        }
+      }
+    }
+  }
+
   if (issues.length > 0) fail(filePath, issues);
 
   return data as unknown as ControllerConfig;

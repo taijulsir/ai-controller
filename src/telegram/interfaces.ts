@@ -2,10 +2,14 @@ import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../
 import type { ExecutionResult } from "../controller/types";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
+import type { RepositoryHealthReport } from "../git/types";
+import type { ConflictResolutionOutcome } from "../gitengines/types";
+import type { ApprovalGateRequest } from "../gitorchestration/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { PipelineResult } from "../pipeline/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
+import type { RecoveryOutcome } from "../recovery/types";
 import type { RuntimeReport } from "../reporting/types";
 import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { UndoOutcome } from "../undo/types";
@@ -36,6 +40,17 @@ export interface ITelegramTransport {
 
 export interface ITelegramCallbackHandler {
   handleCallback(callbackQuery: TelegramCallbackQuery): Promise<void>;
+}
+
+// Narrow, summary/detail-based sibling of IApprovalProvider.requestApproval()
+// -- for callers (Recovery Planner steps, Conflict Resolution guided mode,
+// Command Orchestrator, the divergence "ask" path) that have a correlationId
+// and operator-facing text but no full Task object to build a prompt from.
+// Backed by the exact same pending-map/settle()/timeout machinery
+// TelegramApprovalProvider already uses for IApprovalProvider -- a second
+// entry point into that one mechanism, not a second mechanism.
+export interface IApprovalGateDelivery {
+  requestGateApproval(request: ApprovalGateRequest): Promise<boolean>;
 }
 
 export interface ICommandParser {
@@ -83,6 +98,14 @@ export interface IResponseFormatter {
   // returned -- every branch (nothing to undo, execution in progress, drift
   // detected, undone) is laid out here, never decided here.
   formatUndoResult(outcome: UndoOutcome): string;
+  // Git Orchestration redesign: /health, /recover, /resume, /abort --
+  // each is exactly what the matching ApplicationService method returned,
+  // laid out as text; none of them decide anything ApplicationService
+  // hasn't already decided.
+  formatRepositoryHealth(report: RepositoryHealthReport): string;
+  formatRecoveryResult(outcome: RecoveryOutcome | { kind: "nothing-to-recover" }): string;
+  formatResumeResult(outcome: ConflictResolutionOutcome | { kind: "nothing-to-resume" }): string;
+  formatAbortResult(outcome: { kind: "aborted"; operation: string } | { kind: "nothing-to-abort" }): string;
   formatPipelineResult(result: PipelineResult): string;
   // Phase 12: result is exactly what AutonomousExecutionOrchestrator.attemptExecution()
   // returned -- undefined means nothing eligible was found, never a

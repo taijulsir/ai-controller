@@ -1,11 +1,12 @@
 import type { IApprovalCanceller, IApprovalPendingReader, IApprovalProvider } from "../approval/interfaces";
 import type { ApprovalDecision, ApprovalRequest } from "../approval/types";
+import type { ApprovalGateRequest } from "../gitorchestration/types";
 import { APPROVAL_TIMEOUT_MINUTES } from "./TelegramConstants";
 import { parseTelegramCorrelationId } from "./TelegramCorrelation";
 import { escapeHtml } from "./TelegramHtml";
 import { buildApprovalKeyboard } from "./TelegramKeyboardBuilder";
 import { describeError, logEvent } from "./TelegramLogger";
-import type { ITelegramCallbackHandler, ITelegramClient, ITelegramSecurity } from "./interfaces";
+import type { IApprovalGateDelivery, ITelegramCallbackHandler, ITelegramClient, ITelegramSecurity } from "./interfaces";
 import type { TelegramCallbackQuery } from "./types";
 
 interface PendingApproval {
@@ -17,7 +18,9 @@ interface PendingApproval {
 // loses any request that hasn't been approved/rejected yet (the requester's
 // original task call will still be awaiting a promise that never resolves,
 // until the timeout below fires it against a now-empty map).
-export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCallbackHandler, IApprovalPendingReader, IApprovalCanceller {
+export class TelegramApprovalProvider
+  implements IApprovalProvider, ITelegramCallbackHandler, IApprovalPendingReader, IApprovalCanceller, IApprovalGateDelivery
+{
   private readonly pending = new Map<string, PendingApproval>();
 
   constructor(
@@ -26,7 +29,24 @@ export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCal
   ) {}
 
   async requestApproval(request: ApprovalRequest): Promise<ApprovalDecision> {
-    const target = parseTelegramCorrelationId(request.correlationId);
+    return this.awaitDecision(request.correlationId, this.buildPromptText(request));
+  }
+
+  // IApprovalGateDelivery's one method: same pending-map/settle()/timeout
+  // machinery as requestApproval() above, just keyed off a correlationId +
+  // pre-built summary/detail rather than a full Task -- for callers (Command
+  // Orchestrator, Recovery Planner steps, Conflict Resolution guided mode)
+  // that never have a Task to build a prompt from.
+  async requestGateApproval(request: ApprovalGateRequest): Promise<boolean> {
+    const decision = await this.awaitDecision(
+      request.correlationId,
+      `Approval required: ${escapeHtml(request.summary)}.\n\n${escapeHtml(request.detail)}\n\nApprove or reject?`,
+    );
+    return decision.approved;
+  }
+
+  private async awaitDecision(correlationId: string, promptText: string): Promise<ApprovalDecision> {
+    const target = parseTelegramCorrelationId(correlationId);
     if (!target) {
       return {
         approved: false,
@@ -36,25 +56,25 @@ export class TelegramApprovalProvider implements IApprovalProvider, ITelegramCal
 
     return new Promise<ApprovalDecision>((resolve) => {
       const timeout = setTimeout(() => {
-        this.pending.delete(request.correlationId);
-        logEvent("warn", "telegram.approval.timed_out", { correlationId: request.correlationId });
+        this.pending.delete(correlationId);
+        logEvent("warn", "telegram.approval.timed_out", { correlationId });
         resolve({ approved: false, reason: `Approval request timed out after ${APPROVAL_TIMEOUT_MINUTES} minute(s).` });
       }, APPROVAL_TIMEOUT_MINUTES * 60_000);
 
-      this.pending.set(request.correlationId, { resolve, timeout });
+      this.pending.set(correlationId, { resolve, timeout });
 
       this.telegramClient
         .sendMessage({
           chatId: target.chatId,
-          text: this.buildPromptText(request),
-          inlineKeyboard: buildApprovalKeyboard(request.correlationId),
+          text: promptText,
+          inlineKeyboard: buildApprovalKeyboard(correlationId),
         })
         .then(() => {
-          logEvent("info", "telegram.approval.requested", { correlationId: request.correlationId, chatId: target.chatId });
+          logEvent("info", "telegram.approval.requested", { correlationId, chatId: target.chatId });
         })
         .catch((error) => {
-          logEvent("error", "telegram.approval.send_failed", { correlationId: request.correlationId, error: describeError(error) });
-          this.settle(request.correlationId, {
+          logEvent("error", "telegram.approval.send_failed", { correlationId, error: describeError(error) });
+          this.settle(correlationId, {
             approved: false,
             reason: "Failed to send the Telegram approval prompt.",
           });

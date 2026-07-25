@@ -87,6 +87,13 @@ export type ApplicationQuery =
   // repo=x /undo already work via the shared position-0/1 REPO_TOKEN logic
   // every command already gets.
   | { type: "undo" }
+  // Git Orchestration redesign: bare, top-level commands, same shape as
+  // "undo" above -- none takes a subcommand or repo=-adjacent argument of
+  // its own.
+  | { type: "health" }
+  | { type: "recover" }
+  | { type: "resume" }
+  | { type: "abort" }
   | { type: "runtime-report" }
   | { type: "runtime-status" }
   | { type: "runtime-diagnostics" }
