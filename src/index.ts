@@ -15,7 +15,7 @@ import { DecisionEngine } from "./decisions";
 import { RuntimeDiagnosticsEngine } from "./diagnostics";
 import { DeferredExecutionStateReader, ExecutionStateTracker } from "./executionstate";
 import { ConflictResolutionEngine, IntelligentSyncEngine, MergeEngine, RebaseEngine } from "./gitengines";
-import { GitHealthService, RepositorySnapshotService } from "./git";
+import { GitHealthService, GitHistoryService, RepositorySnapshotService } from "./git";
 import { AutomaticSafetyPolicies, CommandOrchestrator, DeferredApprovalGate, PreflightValidationPolicy } from "./gitorchestration";
 import { GitStateMachine, RepositoryStateAnalyzer } from "./gitstate";
 import { GitTransactionManager } from "./gittransaction";
@@ -65,6 +65,7 @@ import {
   TelegramApiClient,
   TelegramApprovalProvider,
   TelegramAttentionTransport,
+  TelegramCallbackRouter,
   TelegramLongPoller,
   TelegramSecurity,
   buildTelegramCorrelationId,
@@ -299,6 +300,9 @@ async function bootstrap(): Promise<void> {
     path.join(path.dirname(controllerConfigForArtifacts.memory.directory), "git-journal");
   const operationJournal = createOperationJournal(gitJournalDirectory);
   const gitHealthService = new GitHealthService(repositoryRegistry, operationJournal);
+  // Git History & Inspection System: same "one shared instance, per-call
+  // GitAdapter construction" shape as gitHealthService above.
+  const gitHistoryService = new GitHistoryService(repositoryRegistry);
   const gitTransactionManager = new GitTransactionManager(repositorySnapshotService, operationJournal, repositoryRegistry);
   const preflightValidationPolicy = new PreflightValidationPolicy();
   const automaticSafetyPolicies = new AutomaticSafetyPolicies(configService);
@@ -362,6 +366,7 @@ async function bootstrap(): Promise<void> {
     repositoryRecoveryWorkflow,
     conflictResolutionEngine,
     safeUndoFramework,
+    gitHistoryService,
     artifactModule.service,
     artifactModule.maintenance,
   );
@@ -778,7 +783,14 @@ async function bootstrap(): Promise<void> {
     undefined,
     responseFormatter,
   );
-  poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramApprovalProvider);
+  // Git History & Inspection System: TelegramLongPoller still takes exactly
+  // one callbackHandler -- TelegramCallbackRouter dispatches to both
+  // telegramApprovalProvider's existing Approve/Reject buttons and
+  // telegramAdapter's own new Show/Diff/Undo buttons (see
+  // TelegramCallbackRouter's own doc comment), neither of which changed to
+  // support this.
+  const telegramCallbackHandler = new TelegramCallbackRouter(telegramApprovalProvider, telegramAdapter);
+  poller = new TelegramLongPoller(telegramClient, telegramAdapter, telegramCallbackHandler);
 
   // Advisory, same philosophy as EnvironmentValidator above: registering the
   // command list is what makes Telegram show suggestions when a user types

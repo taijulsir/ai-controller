@@ -7,10 +7,10 @@ import type { IRepositoryRegistry } from "../repositories/interfaces";
 import { GitCommandRunner } from "./GitCommandRunner";
 import { DEFAULT_RECENT_COMMITS_LIMIT, GitCommand } from "./GitConstants";
 import { GitCommandError, NoActiveRepositoryError } from "./errors";
-import { parseGitLog } from "./GitLogParser";
+import { parseCommitMetadata, parseGitLog, parseNumstat } from "./GitLogParser";
 import { parseGitStatus } from "./GitStatusParser";
 import type { IGitAdapter } from "./interfaces";
-import type { CommitSummary, GitFileChange, GitStatus, SubmoduleStatus, WorktreeInfo } from "./types";
+import type { CommitDiffStat, CommitMetadata, CommitSummary, GitFileChange, GitStatus, SubmoduleStatus, WorktreeInfo } from "./types";
 
 export class GitAdapter implements IGitAdapter {
   constructor(
@@ -59,6 +59,50 @@ export class GitAdapter implements IGitAdapter {
   async getRecentCommits(limit: number = DEFAULT_RECENT_COMMITS_LIMIT): Promise<CommitSummary[]> {
     const output = await this.run(GitCommand.recentCommits(limit));
     return parseGitLog(output);
+  }
+
+  // Git History & Inspection System (/history). Delegates straight to
+  // getRecentCommits above when no filter is given -- the exact same command
+  // and parse path RepositoryIntelligenceService's own /status call already
+  // uses -- so the common, unfiltered case never runs a second, slightly
+  // different git invocation for the same result.
+  async getCommitHistory(limit: number, ref?: string, author?: string, search?: string): Promise<CommitSummary[]> {
+    if (!ref && !author && !search) {
+      return this.getRecentCommits(limit);
+    }
+    const output = await this.run(GitCommand.filteredHistory(limit, ref, author, search));
+    return parseGitLog(output);
+  }
+
+  // /show, /diff's own header -- a single commit's full metadata, addressed
+  // by hash (which git itself resolves; any abbreviation git accepts works
+  // here unchanged).
+  async getCommitMetadata(hash: string): Promise<CommitMetadata> {
+    const output = await this.run(GitCommand.showCommitMeta(hash));
+    return parseCommitMetadata(output);
+  }
+
+  // /show's "Files Changed" section -- reuses mapDiffStatus, the exact same
+  // status-code mapping diffChangedFiles already applies to tab-separated
+  // "<code>\t<path>" lines; diff-tree --name-status produces that same shape.
+  async getCommitFileChanges(hash: string): Promise<GitFileChange[]> {
+    const output = await this.run(GitCommand.nameStatusForCommit(hash));
+    return output
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const [statusCode, ...pathParts] = line.split("\t");
+        return { path: pathParts.join("\t"), status: this.mapDiffStatus(statusCode) };
+      });
+  }
+
+  // /diff's per-file +/- counts, and /show's aggregate totals -- both
+  // derived from this same numstat data by GitHistoryService, never two
+  // independently-computed sets of numbers.
+  async getCommitDiffStat(hash: string): Promise<CommitDiffStat[]> {
+    const output = await this.run(GitCommand.numstatForCommit(hash));
+    return parseNumstat(output);
   }
 
   // Deliberately not `git stash create`: verified empirically that it (a)

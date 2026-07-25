@@ -2,7 +2,7 @@ import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../
 import type { ExecutionResult } from "../controller/types";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
-import type { RepositoryHealthReport } from "../git/types";
+import type { CommitDetail, CommitDiffStatResult, GitHistoryResult, RepositoryHealthReport } from "../git/types";
 import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { ApprovalGateRequest } from "../gitorchestration/types";
 import type { RepositorySnapshot } from "../intelligence/types";
@@ -60,7 +60,9 @@ export interface ICommandParser {
 export interface IResponseFormatter {
   format(result: ExecutionResult): string;
   formatRepositoryStatus(snapshot: RepositorySnapshot): string;
-  formatHistory(events: ProjectMemoryEvent[]): string;
+  // Renamed from formatHistory: reachable only via "/task history" now --
+  // see IApplicationService.getTaskExecutionHistory()'s own doc comment.
+  formatTaskHistory(events: ProjectMemoryEvent[]): string;
   formatInsights(report: RepositoryInsightReport): string;
   // Phase E: report is exactly what ApplicationService.getSessionStatus()
   // composed -- repository name, ClaudeSessionInfo, derived lifecycleState,
@@ -102,6 +104,13 @@ export interface IResponseFormatter {
   // each is exactly what the matching ApplicationService method returned,
   // laid out as text; none of them decide anything ApplicationService
   // hasn't already decided.
+  // Git History & Inspection System: /history, /show, /diff -- each is
+  // exactly what the matching ApplicationService method returned, laid out
+  // as text; none of them decide anything ApplicationService hasn't already
+  // decided.
+  formatGitHistory(result: GitHistoryResult): string;
+  formatCommitDetail(detail: CommitDetail): string;
+  formatCommitDiff(result: CommitDiffStatResult): string;
   formatRepositoryHealth(report: RepositoryHealthReport): string;
   formatRecoveryResult(outcome: RecoveryOutcome | { kind: "nothing-to-recover" }): string;
   formatResumeResult(outcome: ConflictResolutionOutcome | { kind: "nothing-to-resume" }): string;

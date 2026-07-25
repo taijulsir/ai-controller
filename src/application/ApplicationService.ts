@@ -20,13 +20,21 @@ import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { IExecutionStateReader } from "../executionstate/interfaces";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import { GitAdapter } from "../git/GitAdapter";
-import type { IGitHealthService } from "../git/interfaces";
-import type { InProgressOperationKind, RepositoryHealthReport } from "../git/types";
+import type { IGitHealthService, IGitHistoryService } from "../git/interfaces";
+import type {
+  CommitDetail,
+  CommitDiffStatResult,
+  GitHistoryFilter,
+  GitHistoryResult,
+  InProgressOperationKind,
+  RepositoryHealthReport,
+} from "../git/types";
 import type { IConflictResolutionEngine } from "../gitengines/interfaces";
 import { ConflictResolutionMode } from "../gitengines/types";
 import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
 import type { RepositorySnapshot } from "../intelligence/types";
+import type { JournalRollbackStrategy } from "../journal/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { IProactiveMonitor } from "../monitoring/interfaces";
@@ -61,6 +69,18 @@ import type { UndoOutcome } from "../undo/types";
 import type { EngineeringWorkspace } from "../workspace/types";
 import { NoActiveRepositoryError } from "./errors";
 import type { IApplicationService } from "./interfaces";
+
+// Git History & Inspection System: deliberately smaller than /history's own
+// DEFAULT_HISTORY_LIMIT (10) -- this is a quick reference list for "which
+// hash do I type", not a full history browse.
+const UNDO_PREVIEW_COMMIT_COUNT = 5;
+
+// The two JournalRollbackStrategy values whose GitUndoPlan.afterRef is a
+// branch name, not a commit reference (see that field's own doc comment in
+// src/undo/types.ts) -- a "/undo <hash>" target can never be validated
+// against these the way it is for the other, ref-based strategies, so they
+// route to target-requires-confirm-git instead of target-mismatch-git.
+const BRANCH_SHAPED_ROLLBACK_STRATEGIES: ReadonlySet<JournalRollbackStrategy> = new Set(["switch-back-to-branch", "delete-branch"]);
 
 export class ApplicationService implements IApplicationService {
   constructor(
@@ -204,6 +224,12 @@ export class ApplicationService implements IApplicationService {
     private readonly repositoryRecoveryWorkflow: IRepositoryRecoveryWorkflow,
     private readonly conflictResolutionEngine: IConflictResolutionEngine,
     private readonly safeUndoFramework: ISafeUndoFramework,
+    // Git History & Inspection System: same Foundation-layer role as
+    // gitHealthService above -- getCommitHistory/getCommitDetail/
+    // getCommitDiffStat below are direct pass-throughs, and
+    // undoLastExecution()'s bare-"/undo" preview reuses it too, rather than
+    // a third, independent way of listing recent commits.
+    private readonly gitHistoryService: IGitHistoryService,
     // Artifact Management: the same single ArtifactService/maintenance pair
     // src/index.ts constructs via createArtifactModule() for TaskArtifactRecorder
     // -- this class never constructs or rebuilds its own, it only exposes
@@ -222,8 +248,27 @@ export class ApplicationService implements IApplicationService {
     return this.repositoryIntelligence.getSnapshot(this.resolveRepositoryId(repositoryId));
   }
 
-  async getRepositoryHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]> {
+  // Renamed from getRepositoryHistory: now reachable only via "/task history"
+  // (see CommandParser.buildTaskQuery) -- freed "/history" for the Git
+  // History & Inspection System's own commit log below, which is what that
+  // name means to every other consumer of this bot. Behavior unchanged.
+  async getTaskExecutionHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]> {
     return this.projectMemory.getRecentEvents({ repositoryId: this.resolveRepositoryId(repositoryId), limit });
+  }
+
+  // Git History & Inspection System: direct pass-throughs to Git History
+  // Service, the same "no synthesis of its own" shape getRepositoryHealth()
+  // already has for Git Health Service.
+  async getCommitHistory(repositoryId: string | undefined, filter: GitHistoryFilter): Promise<GitHistoryResult> {
+    return this.gitHistoryService.getHistory(this.resolveRepositoryId(repositoryId), filter);
+  }
+
+  async getCommitDetail(repositoryId: string | undefined, hash: string): Promise<CommitDetail> {
+    return this.gitHistoryService.getCommitDetail(this.resolveRepositoryId(repositoryId), hash);
+  }
+
+  async getCommitDiffStat(repositoryId: string | undefined, hash: string): Promise<CommitDiffStatResult> {
+    return this.gitHistoryService.getCommitDiffStat(this.resolveRepositoryId(repositoryId), hash);
   }
 
   async getRepositoryInsights(repositoryId?: string): Promise<RepositoryInsightReport> {
@@ -369,8 +414,20 @@ export class ApplicationService implements IApplicationService {
   // still takes priority over any comparison -- UndoService.buildUndoPlan()
   // already reports "execution-in-progress" before either timestamp can be
   // compared.
-  async undoLastExecution(repositoryId?: string): Promise<UndoOutcome> {
+  // Git History & Inspection System: target undefined is a preview -- recent
+  // commits only, nothing built or executed, so "/undo" alone can never act.
+  // A real target (a commit hash, or the literal "confirm") builds both
+  // plans exactly as before and validates target against whichever plan
+  // wins, only then executing -- see UndoOutcome's own doc comments for
+  // what each mismatch outcome means.
+  async undoLastExecution(repositoryId?: string, target?: string): Promise<UndoOutcome> {
     const resolvedId = this.resolveRepositoryId(repositoryId);
+
+    if (target === undefined) {
+      const history = await this.gitHistoryService.getHistory(resolvedId, { limit: UNDO_PREVIEW_COMMIT_COUNT });
+      return { kind: "preview", commits: history.commits };
+    }
+
     const [taskPlan, gitPlan] = await Promise.all([
       this.undoService.buildUndoPlan(resolvedId),
       this.safeUndoFramework.buildUndoPlan(resolvedId),
@@ -382,6 +439,18 @@ export class ApplicationService implements IApplicationService {
 
     const preferGit = gitPlan !== undefined && (taskPlan.capturedAt === undefined || gitPlan.recordedAt > taskPlan.capturedAt);
     if (preferGit && gitPlan) {
+      if (target !== "confirm") {
+        // afterRef is a branch name, not a commit, for these two strategies
+        // (see GitUndoPlan.afterRef's own doc comment) -- there is nothing
+        // to match a hash against, so this must never be presented as
+        // "commit <branch name>" the way target-mismatch-git would.
+        if (BRANCH_SHAPED_ROLLBACK_STRATEGIES.has(gitPlan.strategy)) {
+          return { kind: "target-requires-confirm-git", operation: gitPlan.operation };
+        }
+        if (!(gitPlan.afterRef?.startsWith(target) ?? false)) {
+          return { kind: "target-mismatch-git", expectedHash: gitPlan.afterRef ?? "unknown", operation: gitPlan.operation, givenTarget: target };
+        }
+      }
       await this.safeUndoFramework.executeUndoPlan(gitPlan);
       return { kind: "git-undone", operation: gitPlan.operation };
     }
@@ -392,6 +461,9 @@ export class ApplicationService implements IApplicationService {
       case "drift-detected":
         return { kind: "drift-detected", checkpointId: taskPlan.checkpointId!, taskType: taskPlan.taskType!, conflictingFiles: taskPlan.conflictingFiles };
       case "ready":
+        if (target !== "confirm") {
+          return { kind: "target-requires-confirm", taskType: taskPlan.taskType! };
+        }
         return this.undoService.executeUndoPlan(taskPlan);
     }
   }

@@ -11,6 +11,16 @@ export const APPROVAL_TIMEOUT_MINUTES = 15;
 // right at the boundary never trips the API's exact cutoff.
 export const TELEGRAM_MAX_MESSAGE_LENGTH = 4000;
 
+// Git History & Inspection System (/history): a per-message inline keyboard
+// grows by one row (3 buttons) per commit shown -- uncapped, a full
+// MAX_HISTORY_LIMIT (50) response would attach 150 buttons to a single
+// message, which is unusable as a keyboard even though the text itself
+// still renders fine (and still gets its own, separate split via
+// splitMessageText if it's long). Capped independently of the display
+// count so every commit stays visible and addressable via /show, /diff,
+// /undo <hash> -- only how many of them get a *button row* is bounded.
+export const MAX_HISTORY_KEYBOARD_ITEMS = 10;
+
 export function buildTelegramApiUrl(token: string, method: string): string {
   return `${TELEGRAM_API_BASE_URL}/bot${token}/${method}`;
 }

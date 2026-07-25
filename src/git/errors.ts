@@ -31,3 +31,26 @@ export class NoActiveRepositoryError extends Error {
     this.name = "NoActiveRepositoryError";
   }
 }
+
+// Git History & Inspection System: thrown by GitHistoryService instead of
+// letting a raw GitCommandError (git's own "fatal: bad revision" stderr)
+// reach the user directly -- /show, /diff, and /undo <hash> all address a
+// single commit by a user-typed reference, and this is the one clear,
+// friendly message every one of them needs when it doesn't resolve.
+export class CommitNotFoundError extends Error {
+  constructor(reference: string) {
+    super(`No commit found matching "${reference}".`);
+    this.name = "CommitNotFoundError";
+  }
+}
+
+// Git History & Inspection System: thrown by GitHistoryService for
+// "/history branch:<name>" when <name> isn't a local branch -- checked
+// proactively against listBranches() rather than left to surface as git
+// log's own ambiguous "unknown revision or path" stderr.
+export class BranchNotFoundError extends Error {
+  constructor(branch: string) {
+    super(`No local branch named "${branch}" exists.`);
+    this.name = "BranchNotFoundError";
+  }
+}

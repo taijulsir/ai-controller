@@ -1,3 +1,4 @@
+import type { CommitSummary } from "../git/types";
 import type { JournalOperationType, JournalRollbackStrategy } from "../journal/types";
 import type { TaskType } from "../planner/types";
 
@@ -63,6 +64,22 @@ export interface GitUndoPlan {
   // UndoPlan.capturedAt above, compared against it to decide which undo
   // mechanism actually reflects the repository's most recent change.
   recordedAt: Date;
+  // Git History & Inspection System: the JournalEntry's own afterRef,
+  // carried straight through unchanged -- the commit "/undo <hash>" lets a
+  // user confirm against without remembering it, so ApplicationService never
+  // needs a second journal lookup just to show/validate which commit this
+  // plan would actually undo. Corrected: this is NOT always a commit --
+  // SwitchBranchWorkflow/CreateBranchWorkflow (rollbackStrategy
+  // "switch-back-to-branch"/"delete-branch") set it to a *branch name*, since
+  // neither operation's undo is expressed as a git ref at all (see
+  // SafeUndoFramework.executeUndoPlan's own switch, which reads
+  // entry.metadata.previousBranch/entry.metadata.branch for those two
+  // strategies, never this field). Only a genuine commit reference for the
+  // other, ref-based strategies (reset-hard/reset-soft/restore-tree/
+  // revert-and-force-push-with-lease) -- callers must check `strategy`
+  // before presenting this value as "commit X" (see
+  // ApplicationService.undoLastExecution()).
+  afterRef: string | undefined;
 }
 
 export type UndoOutcome =
@@ -72,4 +89,28 @@ export type UndoOutcome =
   | { kind: "undone"; checkpointId: string; taskType: TaskType; restoredFiles: string[]; deletedFiles: string[] }
   // /undo's git-native outcome, produced when Safe Undo Framework's plan was
   // the more recent of the two (see ApplicationService.undoLastExecution()).
-  | { kind: "git-undone"; operation: JournalOperationType };
+  | { kind: "git-undone"; operation: JournalOperationType }
+  // Git History & Inspection System: a bare "/undo" no longer acts -- it
+  // shows recent commits for reference and asks the user to reply with
+  // "/undo <hash>" instead. Deliberately decoupled from the actual undo
+  // candidate (built only once a target is given, see undoLastExecution's
+  // own doc comment) -- this is a cheap, generic reference list, not a
+  // preview of one specific plan.
+  | { kind: "preview"; commits: CommitSummary[] }
+  // "/undo <hash>" where <hash> doesn't match the commit Safe Undo
+  // Framework's plan would actually undo (or match its prefix) --
+  // expectedHash/operation describe what the real candidate is, so
+  // ResponseFormatter can tell the user exactly what to type instead.
+  | { kind: "target-mismatch-git"; expectedHash: string; operation: JournalOperationType; givenTarget: string }
+  // "/undo <hash>" where the actual candidate is a Claude-editing task
+  // snapshot, which has no commit hash to match against at all -- the user
+  // must reply with the literal "/undo confirm" instead.
+  | { kind: "target-requires-confirm"; taskType: TaskType }
+  // "/undo <hash>" where the actual candidate is a git-native operation
+  // whose rollbackStrategy is branch-shaped, not commit-shaped
+  // ("switch-back-to-branch"/"delete-branch" -- see GitUndoPlan.afterRef's
+  // own doc comment) -- there is no commit to match against, so (unlike
+  // target-mismatch-git) this is never presented as "commit X"; the user
+  // must reply with the literal "/undo confirm" instead, same as the
+  // task-snapshot case above.
+  | { kind: "target-requires-confirm-git"; operation: JournalOperationType };

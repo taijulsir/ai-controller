@@ -7,7 +7,14 @@ import type { RepositoryInsightReport } from "../decisions/types";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import type { ConflictResolutionOutcome } from "../gitengines/types";
-import type { InProgressOperationKind, RepositoryHealthReport } from "../git/types";
+import type {
+  CommitDetail,
+  CommitDiffStatResult,
+  GitHistoryFilter,
+  GitHistoryResult,
+  InProgressOperationKind,
+  RepositoryHealthReport,
+} from "../git/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
@@ -76,7 +83,10 @@ export interface IAutonomousPlanScheduleProvider {
 
 export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAutonomousPlanScheduleProvider {
   getRepositoryStatus(repositoryId?: string): Promise<RepositorySnapshot>;
-  getRepositoryHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]>;
+  // Renamed from getRepositoryHistory -- reachable only via "/task history"
+  // now that "/history" means the Git History & Inspection System's own
+  // commit log (getCommitHistory below).
+  getTaskExecutionHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]>;
   getRepositoryInsights(repositoryId?: string): Promise<RepositoryInsightReport>;
   // Phase E: composes ClaudeSessionInfo, the repository's display name, and
   // the same getCurrentTask() every /task query already exposes, plus a
@@ -115,7 +125,11 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   // ApplicationService's own doc comment. Async, unlike getCurrentTask()/
   // cancelCurrentTask(): UndoService reads project memory history from disk
   // and calls git, neither of which is an in-memory read.
-  undoLastExecution(repositoryId?: string): Promise<UndoOutcome>;
+  // Git History & Inspection System: target is undefined for a bare "/undo"
+  // (preview only, nothing executed), the literal "confirm" to execute the
+  // current top candidate unconditionally, or a commit hash/prefix to
+  // execute it only if that hash is what the candidate would actually undo.
+  undoLastExecution(repositoryId?: string, target?: string): Promise<UndoOutcome>;
   getRecommendations(repositoryId?: string): Promise<RepositoryRecommendationReport>;
   getEngineeringAssistance(repositoryId?: string): Promise<RepositoryAssistanceReport>;
   getEngineeringWorkspace(repositoryId?: string): Promise<EngineeringWorkspace>;
@@ -222,6 +236,13 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   deleteAllArtifacts(confirmed: boolean): Promise<{ totalDeleted: number; totalRemaining: number; elapsedMs: number }>;
   // Maintenance, not a business query -- same admin gate as deleteArtifacts.
   rebuildArtifactIndex(): Promise<{ before: number; after: number; elapsedMs: number }>;
+
+  // Git History & Inspection System: /history, /show, /diff -- direct,
+  // read-only pass-throughs to Git History Service, the same shape
+  // getRepositoryHealth() below already has for Git Health Service.
+  getCommitHistory(repositoryId: string | undefined, filter: GitHistoryFilter): Promise<GitHistoryResult>;
+  getCommitDetail(repositoryId: string | undefined, hash: string): Promise<CommitDetail>;
+  getCommitDiffStat(repositoryId: string | undefined, hash: string): Promise<CommitDiffStatResult>;
 
   // Git Orchestration redesign: /health -- a direct, read-only view of
   // Git Health Service's own report, no synthesis of its own.

@@ -8,12 +8,15 @@ import type {
   ICommandParser,
   IResponseFormatter,
   ITelegramAdapter,
+  ITelegramCallbackHandler,
   ITelegramClient,
   ITelegramSecurity,
 } from "./interfaces";
 import { ResponseFormatter } from "./ResponseFormatter";
+import { MAX_HISTORY_KEYBOARD_ITEMS } from "./TelegramConstants";
+import { buildGitHistoryItemKeyboard } from "./TelegramKeyboardBuilder";
 import { buildTelegramCorrelationId } from "./TelegramCorrelation";
-import type { ApplicationQuery, ParsedCommand, TelegramUpdate } from "./types";
+import type { ApplicationQuery, InlineKeyboardButton, ParsedCommand, TelegramCallbackQuery, TelegramUpdate } from "./types";
 
 // ExecutionPipeline is the single runtime entrypoint for engineering task
 // execution — TelegramAdapter no longer holds an IControllerCore reference
@@ -22,7 +25,12 @@ import type { ApplicationQuery, ParsedCommand, TelegramUpdate } from "./types";
 // Strategy/Planning/Coordination stack or bypasses it, and is the only thing
 // that ever calls ControllerCore. Query commands are unaffected — they never
 // executed anything and still go straight to ApplicationService.
-export class TelegramAdapter implements ITelegramAdapter {
+// Git History & Inspection System: TelegramAdapter also implements
+// ITelegramCallbackHandler now -- see handleCallback() below and
+// TelegramCallbackRouter's own doc comment for why a second callback
+// handler can coexist with TelegramApprovalProvider's existing one without
+// any change to the poller or to that class.
+export class TelegramAdapter implements ITelegramAdapter, ITelegramCallbackHandler {
   constructor(
     private readonly executionPipeline: IExecutionPipeline,
     private readonly applicationService: IApplicationService,
@@ -86,6 +94,15 @@ export class TelegramAdapter implements ITelegramAdapter {
       // pipeline path.
       if (parsed.query.type === "artifact-get") {
         await this.handleArtifactGet(chatId, parsed.query.id);
+        return;
+      }
+      // Git History & Inspection System: "/history" is the one query type
+      // whose reply carries an inline keyboard (one row of buttons per
+      // commit) -- handled here, before the generic handleQuery() switch
+      // (which only ever returns plain text), the same way "artifact-get"
+      // above sits outside it for its own different reason.
+      if (parsed.query.type === "git-history") {
+        await this.handleGitHistory(chatId, parsed.query, parsed.repositoryId);
         return;
       }
       try {
@@ -168,6 +185,89 @@ export class TelegramAdapter implements ITelegramAdapter {
     }
   }
 
+  // Git History & Inspection System: "/history"'s own handling, outside the
+  // generic handleQuery() switch -- attaches one inline keyboard row per
+  // commit (buildGitHistoryItemKeyboard), keyed by GitHistoryResult's own
+  // resolved repositoryId so a later tap always targets the repository this
+  // listing actually came from. TELEGRAM_MAX_MESSAGE_LENGTH-based splitting
+  // and "keyboard on the final chunk only" are already handled by
+  // ITelegramClient.sendMessage()/splitMessageText -- no pagination logic
+  // of its own is needed here.
+  private async handleGitHistory(
+    chatId: number,
+    query: Extract<ApplicationQuery, { type: "git-history" }>,
+    repositoryId: string | undefined,
+  ): Promise<void> {
+    try {
+      const result = await this.applicationService.getCommitHistory(repositoryId, {
+        limit: query.limit,
+        branch: query.branch,
+        author: query.author,
+        search: query.search,
+      });
+      const text = this.responseFormatter.formatGitHistory(result);
+      // Capped independently of how many commits are actually shown in
+      // `text` above -- every commit stays listed (and reachable via
+      // /show, /diff, /undo <hash>), only the button rows are bounded so a
+      // large /history reply never attaches an unusably large keyboard.
+      const inlineKeyboard: InlineKeyboardButton[][] = result.commits
+        .slice(0, MAX_HISTORY_KEYBOARD_ITEMS)
+        .flatMap((commit) => buildGitHistoryItemKeyboard(result.repositoryId, commit.shortSha));
+      await this.telegramClient.sendMessage({ chatId, text, inlineKeyboard: inlineKeyboard.length > 0 ? inlineKeyboard : undefined });
+    } catch (error) {
+      await this.telegramClient.sendMessage({ chatId, text: this.responseFormatter.formatUnexpectedError(error) });
+    }
+  }
+
+  // Git History & Inspection System: the Show/Diff/Undo inline buttons
+  // /history attaches to each commit -- callback_data is
+  // "history:<action>:<repositoryId>:<shortSha>". Unlike TelegramApprovalProvider's
+  // correlationId (which contains colons and needs "everything after the
+  // second colon" capture), a repository id and a git short hash can never
+  // contain one, so a plain split is always correct here. Ignores anything
+  // it doesn't own (no match, or an unrecognized action) so it can be
+  // called unconditionally by TelegramCallbackRouter alongside
+  // TelegramApprovalProvider's own handleCallback -- the same self-filtering
+  // contract every ITelegramCallbackHandler in this codebase already follows.
+  async handleCallback(callbackQuery: TelegramCallbackQuery): Promise<void> {
+    const match = callbackQuery.data.match(/^history:(show|diff|undo):([^:]+):(.+)$/);
+    if (!match) {
+      return;
+    }
+    const [, action, repositoryId, shortSha] = match;
+
+    if (!this.telegramSecurity.isAuthorized(callbackQuery.userId)) {
+      await this.telegramClient.answerCallbackQuery(callbackQuery.id, "You are not authorized to use this bot.");
+      return;
+    }
+
+    try {
+      const text = await this.handleQuery(this.buildGitHistoryActionQuery(action, shortSha), repositoryId, this.telegramSecurity.isAdmin(callbackQuery.userId));
+      await this.telegramClient.answerCallbackQuery(callbackQuery.id);
+      await this.telegramClient.sendMessage({ chatId: callbackQuery.chatId, text });
+    } catch (error) {
+      await this.telegramClient.answerCallbackQuery(callbackQuery.id, "Something went wrong.");
+      await this.telegramClient.sendMessage({ chatId: callbackQuery.chatId, text: this.responseFormatter.formatUnexpectedError(error) });
+    }
+  }
+
+  // The one place a callback action name becomes the exact same query a
+  // manually-typed "/show <hash>"/"/diff <hash>"/"/undo <hash>" would build
+  // -- handleCallback() and the manual command path share every byte of
+  // logic downstream of this, via the same handleQuery() switch. Adding a
+  // future action here (Cherry-pick, Checkout, Blame, ...) is one more case,
+  // never a parallel implementation.
+  private buildGitHistoryActionQuery(action: string, shortSha: string): Exclude<ApplicationQuery, { type: "artifact-get" } | { type: "git-history" }> {
+    switch (action) {
+      case "show":
+        return { type: "git-show", hash: shortSha };
+      case "diff":
+        return { type: "git-diff", hash: shortSha };
+      default:
+        return { type: "undo", target: shortSha };
+    }
+  }
+
   // Phase 8.10: each "runtime-*" case calls ApplicationService.getRuntimeReport()
   // exactly once, within that case alone — the switch executes exactly one
   // case per call, so no runtime query ever fetches the report more than
@@ -180,17 +280,21 @@ export class TelegramAdapter implements ITelegramAdapter {
   // every other case here is exactly as available to a non-admin authorized
   // user as it always was.
   private async handleQuery(
-    query: Exclude<ApplicationQuery, { type: "artifact-get" }>,
+    query: Exclude<ApplicationQuery, { type: "artifact-get" } | { type: "git-history" }>,
     repositoryId: string | undefined,
     isAdmin: boolean,
   ): Promise<string> {
     switch (query.type) {
       case "status":
         return this.responseFormatter.formatRepositoryStatus(await this.applicationService.getRepositoryStatus(repositoryId));
-      case "history":
-        return this.responseFormatter.formatHistory(
-          await this.applicationService.getRepositoryHistory(repositoryId, query.limit),
+      case "task-history":
+        return this.responseFormatter.formatTaskHistory(
+          await this.applicationService.getTaskExecutionHistory(repositoryId, query.limit),
         );
+      case "git-show":
+        return this.responseFormatter.formatCommitDetail(await this.applicationService.getCommitDetail(repositoryId, query.hash));
+      case "git-diff":
+        return this.responseFormatter.formatCommitDiff(await this.applicationService.getCommitDiffStat(repositoryId, query.hash));
       case "insights":
         return this.responseFormatter.formatInsights(await this.applicationService.getRepositoryInsights(repositoryId));
       case "session":
@@ -212,7 +316,7 @@ export class TelegramAdapter implements ITelegramAdapter {
       case "task-cancel":
         return this.responseFormatter.formatCancelResult(this.applicationService.cancelCurrentTask(repositoryId));
       case "undo":
-        return this.responseFormatter.formatUndoResult(await this.applicationService.undoLastExecution(repositoryId));
+        return this.responseFormatter.formatUndoResult(await this.applicationService.undoLastExecution(repositoryId, query.target));
       case "health":
         return this.responseFormatter.formatRepositoryHealth(await this.applicationService.getRepositoryHealth(repositoryId));
       case "recover":

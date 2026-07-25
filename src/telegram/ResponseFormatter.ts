@@ -2,7 +2,7 @@ import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../
 import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
-import type { RepositoryHealthReport } from "../git/types";
+import type { CommitDetail, CommitDiffStatResult, CommitSummary, GitFileChange, GitHistoryResult, RepositoryHealthReport } from "../git/types";
 import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { RecoveryOutcome } from "../recovery/types";
 import type { UndoOutcome } from "../undo/types";
@@ -16,6 +16,7 @@ import type { SessionLifecycleState, SessionReport, SessionStopOutcome } from ".
 import type { Capability } from "../coordination/types";
 import type { RecommendedAction } from "../strategy/types";
 import type { IResponseFormatter } from "./interfaces";
+import { MAX_HISTORY_KEYBOARD_ITEMS } from "./TelegramConstants";
 import { escapeHtml } from "./TelegramHtml";
 
 // Section titles as produced by RuntimeReportingEngine (Phase 8.9) — used
@@ -66,7 +67,6 @@ const SESSION_LIFECYCLE_LABELS: Record<SessionLifecycleState, string> = {
 // introspect instead.
 const HELP_TEXT_LINES: readonly string[] = [
   "/status",
-  "/history [limit]",
   "/insights",
   "/session",
   "/session reset",
@@ -74,7 +74,10 @@ const HELP_TEXT_LINES: readonly string[] = [
   "/recommendations",
   "/task",
   "/task cancel",
+  "/task history [limit]",
   "/undo",
+  "/undo &lt;hash&gt;",
+  "/undo confirm",
   "/runtime [report|status|diagnostics|monitoring|policy]",
   "/artifact",
   "/artifact get &lt;id&gt;",
@@ -105,6 +108,14 @@ const HELP_TEXT_LINES: readonly string[] = [
   "/health",
   "/resume",
   "/abort",
+  "",
+  "Git History & Inspection",
+  "/history [count]",
+  "/history branch:&lt;name&gt;",
+  "/history author:&lt;name&gt;",
+  "/history search:&lt;text&gt;",
+  "/show &lt;hash&gt;",
+  "/diff &lt;hash&gt;",
   "",
   "Workflow",
   "/ship &lt;message&gt;",
@@ -347,7 +358,147 @@ export class ResponseFormatter implements IResponseFormatter {
       // ApplicationService.undoLastExecution()'s own doc comment.
       case "git-undone":
         return this.template("↩️", "Undo Complete", [this.field("Operation", this.code(outcome.operation))]);
+      // Git History & Inspection System: a bare "/undo" -- nothing executed,
+      // just a reference list of recent commits to reply to.
+      case "preview": {
+        if (outcome.commits.length === 0) {
+          return "✅ No commits found — nothing to undo yet.";
+        }
+        return this.template("↩️", "Recent Commits", [
+          ...outcome.commits.map((commit, index) => `${index + 1}. ${this.code(commit.shortSha)} ${this.escapeHtml(commit.message)}`),
+          "",
+          "Reply with /undo &lt;hash&gt; to undo it, or /undo confirm to undo without a commit reference.",
+        ]);
+      }
+      // "/undo <hash>" where <hash> isn't what would actually be undone.
+      case "target-mismatch-git":
+        return this.template("⚠️", "Cannot Undo", [
+          `The most recent undoable change is ${this.code(outcome.operation)} (commit ${this.code(this.shortRef(outcome.expectedHash))}), not ${this.code(outcome.givenTarget)}.`,
+          "",
+          `Reply with /undo ${this.escapeHtml(this.shortRef(outcome.expectedHash))} or /undo confirm.`,
+        ]);
+      // "/undo <hash>" where the candidate is a Claude-editing task snapshot
+      // -- no commit hash exists to match against.
+      case "target-requires-confirm":
+        return this.template("⚠️", "Cannot Undo", [
+          `The most recent undoable change is uncommitted work from a Claude task (${this.code(outcome.taskType)}), which has no commit hash.`,
+          "",
+          "Reply with /undo confirm to undo it.",
+        ]);
+      // "/undo <hash>" where the candidate is a git-native operation
+      // (switch-branch/create-branch) with no commit to reference at all --
+      // never labeled "commit X" the way target-mismatch-git is, since
+      // there is no commit here, only a branch name.
+      case "target-requires-confirm-git":
+        return this.template("⚠️", "Cannot Undo", [
+          `The most recent undoable change is ${this.code(outcome.operation)}, which has no commit to reference.`,
+          "",
+          "Reply with /undo confirm to undo it.",
+        ]);
     }
+  }
+
+  // Git History & Inspection System: /history -- each commit shown as
+  // "<index>. <hash> <message>" plus a second line of author/relative time,
+  // with a "← <branch>" marker on whichever commit is the branch tip.
+  formatGitHistory(result: GitHistoryResult): string {
+    if (result.commits.length === 0) {
+      return "✅ No commits found for this repository.";
+    }
+
+    const lines = result.commits.flatMap((commit, index) => [
+      `${index + 1}. ${this.code(commit.shortSha)} ${this.escapeHtml(commit.message)}`,
+      `   ${this.escapeHtml(commit.author)} · ${this.formatTimestamp(commit.date)}${this.currentBranchMarker(commit, result)}`,
+    ]);
+
+    // Quick-action buttons are capped independently of this list (see
+    // TelegramAdapter.handleGitHistory) -- every commit above is still
+    // listed and still addressable via the manual commands regardless of
+    // this note, which only exists so a long list doesn't leave the user
+    // wondering why buttons stopped appearing partway down it.
+    const keyboardNote =
+      result.commits.length > MAX_HISTORY_KEYBOARD_ITEMS
+        ? [`Quick-action buttons are shown for the first ${MAX_HISTORY_KEYBOARD_ITEMS} commits only -- use the commands below for the rest.`, ""]
+        : [];
+
+    return this.template("📜", "Recent Commits", [
+      ...lines,
+      "",
+      ...keyboardNote,
+      "Available commands: /show &lt;hash&gt;, /diff &lt;hash&gt;, /undo &lt;hash&gt;.",
+    ]);
+  }
+
+  private currentBranchMarker(commit: CommitSummary, result: GitHistoryResult): string {
+    if (result.detachedHead || commit.sha !== result.headSha || !result.currentBranch) {
+      return "";
+    }
+    return ` ← ${this.code(result.currentBranch)}`;
+  }
+
+  // Git History & Inspection System: /show <hash>.
+  formatCommitDetail(detail: CommitDetail): string {
+    const lines = [
+      this.field("Commit", this.code(detail.sha)),
+      this.field("Short", this.code(detail.shortSha)),
+      this.field("Author", `${this.escapeHtml(detail.authorName)} &lt;${this.escapeHtml(detail.authorEmail)}&gt;`),
+      this.field("Date", this.formatAbsoluteTimestamp(detail.authorDate)),
+      this.field("Relative", this.formatTimestamp(detail.authorDate)),
+    ];
+    if (detail.currentBranch) {
+      lines.push(this.field("Branch", `${this.code(detail.currentBranch)} (HEAD)`));
+    }
+    lines.push(
+      this.field("Parent(s)", detail.parents.length > 0 ? detail.parents.map((parent) => this.code(parent)).join(", ") : "none (root commit)"),
+    );
+    lines.push("", this.escapeHtml(detail.subject));
+
+    lines.push(
+      "",
+      `Files Changed (${detail.filesChanged}):`,
+      ...this.truncateBulletList(
+        detail.files.map((file) => `${this.humanizeFileStatus(file.status)}: ${this.code(file.path)}`),
+        20,
+      ),
+    );
+    lines.push("", `${detail.filesChanged} file(s) changed, +${detail.insertions} insertions, -${detail.deletions} deletions`);
+
+    return this.template("🔎", "Commit Detail", lines);
+  }
+
+  private humanizeFileStatus(status: GitFileChange["status"]): string {
+    switch (status) {
+      case "added":
+        return "Added";
+      case "modified":
+        return "Modified";
+      case "deleted":
+        return "Deleted";
+    }
+  }
+
+  // Git History & Inspection System: /diff <hash> -- a structured per-file
+  // +/- summary, deliberately never the raw unified patch (GitAdapter.diff()
+  // exists for that, but this command's whole point is a scannable summary).
+  formatCommitDiff(result: CommitDiffStatResult): string {
+    const header = [this.field("Commit", this.code(result.shortSha))];
+
+    if (result.files.length === 0) {
+      return this.template("📊", "Diff", [...header, "", "No file changes (empty commit)."]);
+    }
+
+    const fileLines = result.files.flatMap((file) => [
+      this.code(file.path),
+      file.binary ? "  binary file" : `  +${file.insertions} -${file.deletions}`,
+    ]);
+
+    return this.template("📊", "Diff", [
+      ...header,
+      "",
+      ...fileLines,
+      "",
+      `Summary: ${result.filesChanged} file(s) changed, +${result.insertions} insertions, -${result.deletions} deletions`,
+    ]);
   }
 
   // Git Orchestration redesign: /health -- a direct, read-only rendering of
@@ -442,25 +593,33 @@ export class ResponseFormatter implements IResponseFormatter {
     return id.slice(0, 8);
   }
 
+  // Git History & Inspection System: a git short hash is conventionally 7
+  // characters, distinct from shortId's 8 (a checkpoint id, not a git sha).
+  private shortRef(sha: string): string {
+    return sha.slice(0, 7);
+  }
+
   private describeWorkingTree(workingTree: RepositorySnapshot["workingTree"]): string {
     return workingTree.isClean
       ? "clean"
       : `${workingTree.staged.length} staged, ${workingTree.unstaged.length} unstaged, ${workingTree.untracked.length} untracked`;
   }
 
-  formatHistory(events: ProjectMemoryEvent[]): string {
+  // Renamed from formatHistory: reachable only via "/task history" now --
+  // see IApplicationService.getTaskExecutionHistory()'s own doc comment.
+  formatTaskHistory(events: ProjectMemoryEvent[]): string {
     if (events.length === 0) {
       return "No recorded history for this repository.";
     }
 
     // Deliberately no additional truncation here, unlike the other list
     // views: the caller already controls exactly how many events are
-    // returned via /history's own optional limit argument
-    // (ApplicationService.getRepositoryHistory -> ProjectMemoryService's own
-    // limit, default 20) -- imposing a second, independent display cap on
-    // top of a limit the user explicitly asked for would silently override
-    // their own request rather than just presenting it.
-    return this.template("📜", "History", events.map((event) => this.formatHistoryEvent(event)));
+    // returned via /task history's own optional limit argument
+    // (ApplicationService.getTaskExecutionHistory -> ProjectMemoryService's
+    // own limit, default 20) -- imposing a second, independent display cap
+    // on top of a limit the user explicitly asked for would silently
+    // override their own request rather than just presenting it.
+    return this.template("📜", "Task History", events.map((event) => this.formatHistoryEvent(event)));
   }
 
   private formatHistoryEvent(event: ProjectMemoryEvent): string {
@@ -986,6 +1145,14 @@ export class ResponseFormatter implements IResponseFormatter {
     if (diffHours < 24) return `${diffHours}h ago`;
     const diffDays = Math.round(diffHours / 24);
     if (diffDays < 7) return `${diffDays}d ago`;
+    return this.formatAbsoluteTimestamp(date);
+  }
+
+  // Extracted from formatTimestamp's own old-date fallback -- Git History &
+  // Inspection System's /show wants both this and the relative form as
+  // separate, explicit fields, unlike every other caller of formatTimestamp,
+  // which only ever wants one or the other.
+  private formatAbsoluteTimestamp(date: Date): string {
     return date.toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
   }
 

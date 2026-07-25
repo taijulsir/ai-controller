@@ -1,22 +1,26 @@
+import { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT } from "../git/GitConstants";
 import type { Task } from "../planner/types";
 import { CommandParseError } from "./errors";
 import type { ICommandParser } from "./interfaces";
 import type { ApplicationQuery, ParsedCommand } from "./types";
 
+const REPO_TOKEN = /^repo=(\S+)$/;
+
 const QUERY_COMMANDS: ReadonlySet<string> = new Set([
   "status",
-  "history",
   "insights",
   "runtime",
   "help",
   "recommendations",
   "branches",
-  "undo",
   // Git Orchestration redesign: /health is a pure read; /recover, /resume,
   // and /abort each trigger a targeted side effect while answering, the
-  // same way /task cancel and /undo already do despite being "query" kind
-  // -- none of them build a Task domain object or go through
-  // ExecutionPipeline.
+  // same way /task cancel already does despite being "query" kind -- none
+  // of them build a Task domain object or go through ExecutionPipeline.
+  // ("history" and "undo" moved out to their own special-cased blocks in
+  // parse() -- see buildGitHistoryQuery()/the "undo" branch below -- since
+  // both now take their own argument syntax the generic dispatch here
+  // can't express.)
   "health",
   "recover",
   "resume",
@@ -88,8 +92,10 @@ export class CommandParser implements ICommandParser {
     // two for one -- a repo=<id>-shaped token appearing later is left
     // completely alone, so it stays as ordinary argument/description text
     // (e.g. "/implement Add support for repo=test query parameter" must
-    // reach Claude unchanged).
-    const REPO_TOKEN = /^repo=(\S+)$/;
+    // reach Claude unchanged). Module-scoped (not local to this method) so
+    // extractTrailingRepo() below -- a separate method, needed for its own
+    // trailing-scan logic history/show/diff/undo use -- can reuse the exact
+    // same pattern rather than a second, independently-maintained regex.
     let repositoryId: string | undefined;
     let commandName: string | undefined;
     let remainingTokens: string[];
@@ -210,6 +216,51 @@ export class CommandParser implements ICommandParser {
       return { kind: "query", query: this.buildArtifactQuery(args), repositoryId };
     }
 
+    // Git History & Inspection System: "/history" takes its own argument
+    // syntax (a bare count, or exactly one of branch:/author:/search:) the
+    // generic QUERY_COMMANDS dispatch below can't express -- handled here,
+    // the same way "branch"/"task"/"session"/"artifact" already are.
+    // Every one of history/show/diff/undo's own arguments is a closed shape
+    // (a filter prefix, a commit hash, the literal "confirm") -- never
+    // multi-word free text a trailing "repo=x" could be mistaken for part
+    // of -- so, like "task"/"session" above, a trailing repo=<id> is safe to
+    // recognize here even though the shared REPO_TOKEN logic at the top of
+    // this method only scans position 0/1.
+    if (normalizedCommand === "history") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      return { kind: "query", query: this.buildGitHistoryQuery(text), repositoryId: resolvedRepositoryId };
+    }
+
+    // "/show <hash>" and "/diff <hash>" both address one commit by a
+    // user-typed reference -- only the first whitespace-delimited token is
+    // ever taken as the hash, so trailing garbage (other than a trailing
+    // repo=<id>, extracted first) is silently ignored rather than rejected
+    // (git itself is the final authority on whether the hash resolves, via
+    // GitHistoryService).
+    if (normalizedCommand === "show") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      const hash = text.trim().split(/\s+/)[0];
+      if (!hash) throw new CommandParseError('"show" requires a commit hash, e.g. "show 6739c2e".');
+      return { kind: "query", query: { type: "git-show", hash }, repositoryId: resolvedRepositoryId };
+    }
+    if (normalizedCommand === "diff") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      const hash = text.trim().split(/\s+/)[0];
+      if (!hash) throw new CommandParseError('"diff" requires a commit hash, e.g. "diff 6739c2e".');
+      return { kind: "query", query: { type: "git-diff", hash }, repositoryId: resolvedRepositoryId };
+    }
+
+    // Git History & Inspection System: a bare "/undo" is now a preview only
+    // (see ApplicationService.undoLastExecution()'s own doc comment) --
+    // moved out of the generic QUERY_COMMANDS dispatch below, which could
+    // only ever produce the argument-less { type: "undo" } shape, to also
+    // accept the literal "confirm" or a commit hash/prefix.
+    if (normalizedCommand === "undo") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      const target = text.trim().split(/\s+/)[0];
+      return { kind: "query", query: target ? { type: "undo", target } : { type: "undo" }, repositoryId: resolvedRepositoryId };
+    }
+
     if (normalizedCommand && QUERY_COMMANDS.has(normalizedCommand)) {
       return { kind: "query", query: this.buildQuery(normalizedCommand, args), repositoryId };
     }
@@ -223,20 +274,50 @@ export class CommandParser implements ICommandParser {
   }
 
   private buildQuery(command: string, args: string): ApplicationQuery {
-    if (command === "history") {
-      if (!args) {
-        return { type: "history" };
-      }
-      const limit = Number.parseInt(args, 10);
-      if (Number.isNaN(limit) || limit <= 0) {
-        throw new CommandParseError('"history" takes an optional positive number, e.g. "history 10".');
-      }
-      return { type: "history", limit };
-    }
     if (command === "runtime") {
       return this.buildRuntimeQuery(args);
     }
-    return { type: command as "status" | "insights" | "help" | "recommendations" | "branches" | "undo" | "health" | "recover" | "resume" | "abort" };
+    return { type: command as "status" | "insights" | "help" | "recommendations" | "branches" | "health" | "recover" | "resume" | "abort" };
+  }
+
+  // Git History & Inspection System: "/history" recognizes exactly one of a
+  // bare count or a branch:/author:/search: prefix per call, matching every
+  // example the feature was specified with -- never combined in one
+  // invocation. Prefix matching is case-insensitive ("Branch:main" works),
+  // but the filter value itself keeps whatever case the user typed (an
+  // author name or search text is meaningfully case-sensitive).
+  private buildGitHistoryQuery(args: string): ApplicationQuery {
+    const trimmed = args.trim();
+    if (!trimmed) {
+      return { type: "git-history", limit: DEFAULT_HISTORY_LIMIT };
+    }
+
+    const lower = trimmed.toLowerCase();
+    if (lower.startsWith("branch:")) {
+      const branch = trimmed.slice("branch:".length).trim();
+      if (!branch) throw new CommandParseError('"history branch:" requires a branch name, e.g. "history branch:main".');
+      return { type: "git-history", branch };
+    }
+    if (lower.startsWith("author:")) {
+      const author = trimmed.slice("author:".length).trim();
+      if (!author) throw new CommandParseError('"history author:" requires an author name, e.g. "history author:Taijul".');
+      return { type: "git-history", author };
+    }
+    if (lower.startsWith("search:")) {
+      const search = trimmed.slice("search:".length).trim();
+      if (!search) throw new CommandParseError('"history search:" requires search text, e.g. "history search:payment".');
+      return { type: "git-history", search };
+    }
+
+    const limit = Number.parseInt(trimmed, 10);
+    if (Number.isNaN(limit) || limit <= 0) {
+      throw new CommandParseError(
+        `"history" takes an optional positive number (max ${MAX_HISTORY_LIMIT}) or a branch:/author:/search: filter, e.g. "history 20", "history branch:main".`,
+      );
+    }
+    // Silently capped, not rejected -- /history always returns something
+    // useful rather than making the user retry with a smaller number.
+    return { type: "git-history", limit: Math.min(limit, MAX_HISTORY_LIMIT) };
   }
 
   // A bare "/task" (subcommand === "") behaves like the existing plain
@@ -249,8 +330,24 @@ export class CommandParser implements ICommandParser {
         return { type: "task" };
       case "cancel":
         return { type: "task-cancel" };
-      default:
+      default: {
+        // Renamed from the old bare "/history": now "/task history [limit]",
+        // freeing "/history" for the Git History & Inspection System's own
+        // commit log. subcommand is already lowercased by the caller (see
+        // the "task" branch in parse()), same as "cancel" above.
+        if (subcommand === "history" || subcommand.startsWith("history ")) {
+          const limitText = subcommand.slice("history".length).trim();
+          if (!limitText) {
+            return { type: "task-history" };
+          }
+          const limit = Number.parseInt(limitText, 10);
+          if (Number.isNaN(limit) || limit <= 0) {
+            throw new CommandParseError('"task history" takes an optional positive number, e.g. "task history 10".');
+          }
+          return { type: "task-history", limit };
+        }
         throw this.unrecognized("task command", subcommand);
+      }
     }
   }
 
@@ -347,5 +444,22 @@ export class CommandParser implements ICommandParser {
   // /help, since none of the three previously told the user where to look.
   private unrecognized(label: string, name: string): CommandParseError {
     return new CommandParseError(`Sorry, I don't recognize the ${label} "${name}". Send /help to see available commands.`);
+  }
+
+  // Git History & Inspection System: shared by history/show/diff/undo's own
+  // trailing repo= scan above (see their call sites for why it's safe for
+  // these four specifically) -- the same logic "task"/"session" already
+  // duplicate inline for themselves; factored out here rather than a third
+  // and fourth copy, without touching their own already-working versions.
+  // Only ever overrides repositoryId when the caller didn't already resolve
+  // one from the shared position-0/1 REPO_TOKEN logic at the top of parse().
+  private extractTrailingRepo(args: string, repositoryId: string | undefined): { text: string; repositoryId: string | undefined } {
+    const tokens = args.split(/\s+/).filter((token) => token.length > 0);
+    const trailingMatch = tokens[tokens.length - 1]?.match(REPO_TOKEN);
+    if (trailingMatch && repositoryId === undefined) {
+      tokens.pop();
+      return { text: tokens.join(" "), repositoryId: trailingMatch[1] };
+    }
+    return { text: args, repositoryId };
   }
 }
