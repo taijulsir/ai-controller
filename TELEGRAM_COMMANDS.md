@@ -103,25 +103,96 @@ of the default active one, e.g. `/repo=my-repo status`.
 - **Example**: `/fetch`
 
 ### `/sync`
-- **What it does**: Fetches, then fast-forwards the current branch to match its upstream. Fails
-  with a clear error instead of merging or rebasing if a fast-forward isn't possible (the
-  branches have diverged), if the current branch is detached, or if the working tree isn't
-  clean.
-- **When to use**: The safe way to pull in remote changes without risking a merge commit or a
-  rebase.
-- **Type**: Manual.
+- **What it does**: Fetches, then fast-forwards the current branch to match its upstream when
+  possible. On genuine divergence, no longer refuses — it reconciles automatically per
+  `git_orchestration.divergence_strategy` (`rebase` by default, or `merge`, or `ask` for an
+  approval prompt before proceeding), delegating to `/rebase` or `/merge`'s own engine. Fails
+  before attempting anything if the current branch is detached or the working tree isn't clean,
+  or if an unrelated merge/rebase/cherry-pick/revert/bisect is already in progress (run
+  `/recover` first).
+- **When to use**: To bring the current branch up to date with its upstream, including across a
+  divergence you'd otherwise have to resolve manually.
+- **Type**: Manual by default; approval-gated only when `divergence_strategy: ask` is configured
+  *and* the branch has actually diverged (a plain fast-forward never asks).
 - **Example**: `/sync`
 
 ### `/merge <branch>`
 - **What it does**: Merges the named branch into the current one. Fast-forwards when possible;
-  otherwise attempts a real merge commit. On any conflict, automatically runs `git merge
-  --abort` before reporting the failure, so the working tree is never left mid-conflict. Fails
-  if the working tree isn't clean, the current branch is detached, or the named branch is the
-  current branch. The branch name is required.
+  otherwise attempts a real merge commit. On conflict, the merge is deliberately left
+  in-progress (not auto-aborted) — trivial, whitespace-only conflicts are attempted
+  automatically; anything left after that is reported so you can resolve it by hand and run
+  `/resume`, or run `/abort` to cancel outright. Fails before attempting anything if the working
+  tree isn't clean, the current branch is detached, the named branch is the current branch, or
+  another operation is already in progress. The branch name is required.
 - **When to use**: To bring another branch's changes into the one you're on.
 - **Type**: Approval-gated — requires approval whenever `merge` is listed in
   `approval.require_before` (it is, by default, in the shipped config).
 - **Example**: `/merge main`
+
+### `/rebase [onto]`
+- **What it does**: Rebases the current branch onto `onto` (a branch or ref), or onto its own
+  configured upstream if `onto` is omitted. On conflict, same trivial-auto-resolve /
+  leave-in-progress behavior as `/merge` above — resolve manually and run `/resume`, or `/abort`
+  to cancel. Fails before attempting anything if the working tree isn't clean, the current
+  branch is detached, no upstream is configured and no `onto` was given, or another operation is
+  already in progress.
+- **When to use**: To replay the current branch's commits on top of another branch, keeping
+  history linear instead of creating a merge commit.
+- **Type**: Approval-gated — `/rebase` always requires approval before it runs, regardless of
+  `approval.require_before` (this floor cannot be configured away).
+- **Example**: `/rebase`, `/rebase main`
+
+### `/discard`
+- **What it does**: Discards every uncommitted change in the working tree — staged, unstaged,
+  and untracked — in one shot. There is no partial/pathspec form. Reversible: a snapshot is
+  taken immediately beforehand, so `/undo` can restore it afterward.
+- **When to use**: To throw away in-progress work you've decided not to keep, without switching
+  branches or committing first.
+- **Type**: Manual (never approval-gated, regardless of config). Fails if another operation is
+  already in progress.
+- **Example**: `/discard`
+
+### `/recover`
+- **What it does**: Builds a recovery plan from the repository's live health (stale locks;
+  in-progress or interrupted merge/rebase/cherry-pick/revert/bisect; detached HEAD) and runs it
+  immediately — each step re-validates the repository is still in the state the plan was built
+  for before acting, and any irreversible step (e.g. removing a stale lock) is itself
+  approval-gated. Reports "nothing to recover" when the repository is already in a normal
+  operating state.
+- **When to use**: When a git command reports another operation is already in progress, or the
+  repository otherwise seems stuck — the general-purpose "get me unstuck" command.
+- **Type**: Manual to run; individual steps may prompt for approval.
+- **Example**: `/recover`
+
+### `/health`
+- **What it does**: Reports a fuller picture of repository state than `/status` — branch,
+  working-tree summary, upstream ahead/behind and divergence, any in-progress operation, stale
+  lock detection, and stash count.
+- **When to use**: To check repository health before running a mutating command, or to diagnose
+  why one was blocked.
+- **Type**: Manual, read-only.
+- **Example**: `/health`
+
+### `/resume`
+- **What it does**: Attempts to continue an in-progress merge or rebase — auto-resolving any
+  trivial (whitespace-only) conflicts and, if that clears every conflicted file, completing the
+  operation the same way finishing conflict resolution by hand and running `git merge
+  --continue`/`git rebase --continue` would. Reports which files still need manual resolution
+  otherwise. Reports "nothing to resume" when no merge or rebase is actually in progress.
+- **When to use**: After `/merge` or `/rebase` leaves a conflict for you to resolve, once you've
+  fixed the remaining files (or to let it retry auto-resolution).
+- **Type**: Manual to run; may prompt for approval only if it needs to abort after exhausting
+  auto-resolution.
+- **Example**: `/resume`
+
+### `/abort`
+- **What it does**: Immediately aborts whatever merge, rebase, cherry-pick, revert, or bisect is
+  currently in progress, restoring the pre-operation state. No plan, no approval prompt, no
+  re-validation step — the fast, direct escape hatch `/recover`'s own multi-step plan isn't.
+  Reports "nothing to abort" when nothing is in progress.
+- **When to use**: To cancel a merge/rebase/etc. outright instead of resolving it.
+- **Type**: Manual (never approval-gated, regardless of config).
+- **Example**: `/abort`
 
 ### `/branch [<name> | create <name>]`
 - **What it does**: With no argument, reports the current branch (read-only). With a branch
@@ -255,12 +326,15 @@ individually below.
 - **Example**: `/task cancel`
 
 ### `/undo`
-- **What it does**: Reverses the most recent `/implement` or `/fix` task's file changes,
-  provided nothing is currently running for the repository and none of the affected files have
-  changed since. Refuses (with a specific reason) if there's nothing undoable, if a task is
-  currently in progress, or if drift is detected.
-- **When to use**: To roll back the last Claude-made code change.
-- **Type**: Manual (a targeted write, never approval-gated).
+- **What it does**: Reverses whichever is more recent for the repository — the last
+  `/implement`/`/fix` task's file changes, or the last git-native operation (`/sync`, `/merge`,
+  `/rebase`, `/commit`, `/push`, `/branch`, `/discard`). Refuses (with a specific reason) if
+  there's nothing undoable, if a task is currently in progress, or if drift is detected (for the
+  task-based path — something else touched the same files since). Undoing a `/push` is the one
+  case that always asks for approval first, since it already reached the shared remote: approving
+  produces a revert commit plus a force-push-with-lease, not a silent history rewrite.
+- **When to use**: To roll back the last change to a repository, whatever kind it was.
+- **Type**: Manual (a targeted write); approval-gated only when undoing a `/push`.
 - **Example**: `/undo`
 
 ### `/runtime` (or `/runtime report`)

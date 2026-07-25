@@ -1,55 +1,43 @@
-import type { IGitAdapter } from "../../git/interfaces";
-import { DetachedHeadError, MergeConflictError, MissingTaskInputError, SameBranchMergeError, UnsafeGitOperationError } from "../errors";
+import type { IMergeEngine } from "../../gitengines/interfaces";
+import type { ICommandOrchestrator } from "../../gitorchestration/interfaces";
+import { JournalOperationType } from "../../journal/types";
+import { MissingTaskInputError } from "../errors";
 import type { ITaskWorkflow } from "../interfaces";
 import type { MergeTask, Task, WorkflowResult } from "../types";
+import { describeMergeOutcome, runGated } from "./gitOrchestrationSupport";
 
+// Formalizes today's fast-forward/merge/conflict logic as Merge Engine
+// (src/gitengines/MergeEngine.ts), shared with Rebase Engine's own Conflict
+// Resolution Engine instead of this workflow hand-rolling abort-only
+// handling. Detached-HEAD/same-branch/dirty-tree checks are now Pre-flight
+// Validation Policy's job (see PreflightCheck.TargetNotCurrentBranch etc.),
+// enforced uniformly by Command Orchestrator -- DetachedHeadError/
+// SameBranchMergeError/UnsafeGitOperationError/MergeConflictError are gone.
 export class MergeWorkflow implements ITaskWorkflow {
-  constructor(private readonly gitAdapter: IGitAdapter) {}
+  constructor(
+    private readonly commandOrchestrator: ICommandOrchestrator,
+    private readonly mergeEngine: IMergeEngine,
+    private readonly repositoryId: string,
+    private readonly correlationId: string,
+  ) {}
 
-  async execute(task: Task, _signal: AbortSignal): Promise<WorkflowResult> {
+  async execute(task: Task, signal: AbortSignal): Promise<WorkflowResult> {
     const { input } = task as MergeTask;
     if (!input?.branch) {
       throw new MissingTaskInputError(task.type, "branch");
     }
     const targetBranch = input.branch;
 
-    const currentBranch = await this.gitAdapter.currentBranch();
-    if (currentBranch === "HEAD") {
-      throw new DetachedHeadError("merge");
-    }
-    if (targetBranch === currentBranch) {
-      throw new SameBranchMergeError(targetBranch);
-    }
-
-    const status = await this.gitAdapter.status();
-    if (!status.isClean) {
-      throw new UnsafeGitOperationError("merge", status.staged.length, status.unstaged.length, status.untracked.length);
-    }
-
-    const alreadyMerged = await this.gitAdapter.isAncestor(targetBranch, "HEAD");
-    if (alreadyMerged) {
-      return { success: true, output: `"${currentBranch}" is already up to date with "${targetBranch}".` };
-    }
-
-    const canFastForward = await this.gitAdapter.isAncestor("HEAD", targetBranch);
-    if (canFastForward) {
-      await this.gitAdapter.fastForward(targetBranch);
-      return { success: true, output: `Fast-forwarded "${currentBranch}" to "${targetBranch}".` };
-    }
-
-    // Histories have genuinely diverged -- a real merge commit is the only
-    // option left, and it may conflict. Never left half-finished: on any
-    // failure here, the merge is unconditionally aborted before the error
-    // propagates, restoring HEAD/index/working tree to exactly their
-    // pre-merge state via git's own correct tool for this, not the undo
-    // snapshot mechanism (which solves a different problem).
-    try {
-      await this.gitAdapter.mergeBranch(targetBranch);
-    } catch {
-      await this.gitAdapter.abortMerge();
-      throw new MergeConflictError(targetBranch, currentBranch);
-    }
-
-    return { success: true, output: `Merged "${targetBranch}" into "${currentBranch}".` };
+    return runGated(
+      this.commandOrchestrator,
+      {
+        operation: JournalOperationType.Merge,
+        repositoryId: this.repositoryId,
+        correlationId: this.correlationId,
+        input: { targetBranch },
+        run: () => this.mergeEngine.merge(this.repositoryId, this.correlationId, targetBranch, signal),
+      },
+      describeMergeOutcome,
+    );
   }
 }

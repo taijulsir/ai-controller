@@ -2,6 +2,9 @@ import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../
 import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
+import type { RepositoryHealthReport } from "../git/types";
+import type { ConflictResolutionOutcome } from "../gitengines/types";
+import type { RecoveryOutcome } from "../recovery/types";
 import type { UndoOutcome } from "../undo/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
@@ -96,6 +99,12 @@ const HELP_TEXT_LINES: readonly string[] = [
   "/fetch",
   "/sync",
   "/merge &lt;branch&gt;",
+  "/rebase [onto]",
+  "/discard",
+  "/recover",
+  "/health",
+  "/resume",
+  "/abort",
   "",
   "Workflow",
   "/ship &lt;message&gt;",
@@ -333,7 +342,100 @@ export class ResponseFormatter implements IResponseFormatter {
           ...this.truncateBulletList(restoredFiles.map((file) => this.code(file))),
         ]);
       }
+      // Git Orchestration redesign: produced when Safe Undo Framework's plan
+      // was the more recent of the two undo mechanisms -- see
+      // ApplicationService.undoLastExecution()'s own doc comment.
+      case "git-undone":
+        return this.template("↩️", "Undo Complete", [this.field("Operation", this.code(outcome.operation))]);
     }
+  }
+
+  // Git Orchestration redesign: /health -- a direct, read-only rendering of
+  // RepositoryHealthReport. Only ever shows a field when it is actually
+  // informative (upstream/in-progress-operation/interrupted-operation/
+  // stale-lock/stash), the same "no line for a fact that isn't there"
+  // discipline formatRepositoryStatus() already follows.
+  formatRepositoryHealth(report: RepositoryHealthReport): string {
+    const lines = [
+      this.field("Branch", report.detachedHead ? "detached HEAD" : this.code(report.branch)),
+      this.field(
+        "Working tree",
+        report.isClean
+          ? "clean"
+          : `${report.staged.length} staged, ${report.unstaged.length} unstaged, ${report.untracked.length} untracked`,
+      ),
+    ];
+    if (report.upstream) {
+      const divergedSuffix = report.upstream.diverged ? " -- diverged" : "";
+      lines.push(this.field("Upstream", `${this.code(report.upstream.ref)} (${report.upstream.ahead} ahead, ${report.upstream.behind} behind)${divergedSuffix}`));
+    }
+    if (report.inProgressOperation) {
+      lines.push(this.field("In progress", this.code(report.inProgressOperation.kind)));
+    }
+    if (report.locks.staleLockDetected) {
+      lines.push(this.field("Stale lock", "detected"));
+    }
+    if (report.stashCount > 0) {
+      lines.push(this.field("Stashes", String(report.stashCount)));
+    }
+    if (report.interruptedOperation) {
+      lines.push("", "⚠️ An interrupted operation was detected. Run /recover before trying another command.");
+    }
+
+    const icon = report.interruptedOperation ? "🚨" : report.inProgressOperation ? "⚠️" : report.isClean ? "✅" : "🟡";
+    return this.template(icon, "Repository Health", lines);
+  }
+
+  // /recover -- ApplicationService.recoverRepository() either found nothing
+  // to recover (a normal, renderable outcome) or ran Repository Recovery
+  // Workflow's plan and returned a RecoveryOutcome; stoppedAtStep undefined
+  // means every step completed.
+  formatRecoveryResult(outcome: RecoveryOutcome | { kind: "nothing-to-recover" }): string {
+    if (!("planId" in outcome)) {
+      return "✅ Nothing to recover -- the repository is in a normal operating state.";
+    }
+    const lines = [
+      this.field("Completed steps", String(outcome.completedSteps.length)),
+      this.field("Final state", this.code(outcome.finalState)),
+    ];
+    if (outcome.stoppedAtStep) {
+      lines.push(this.field("Stopped at", this.code(outcome.stoppedAtStep)));
+    }
+    const icon = outcome.stoppedAtStep ? "⚠️" : "✅";
+    return this.template(icon, "Recovery", lines);
+  }
+
+  // /resume -- mirrors ConflictResolutionEngine.resolve()'s three outcomes
+  // plus the "nothing was actually in progress" case ApplicationService
+  // checks for before ever calling it.
+  formatResumeResult(outcome: ConflictResolutionOutcome | { kind: "nothing-to-resume" }): string {
+    switch (outcome.kind) {
+      case "nothing-to-resume":
+        return "✅ Nothing to resume -- no merge or rebase is currently in progress.";
+      case "resolved":
+        return this.template("✅", "Resumed", [
+          `Resolved and completed (${outcome.filesResolved.length} file(s)):`,
+          ...this.truncateBulletList(outcome.filesResolved.map((file) => this.code(file))),
+        ]);
+      case "aborted":
+        return this.template("🛑", "Aborted", ["Remaining conflicts could not be auto-resolved, and abort was approved."]);
+      case "needs-guidance":
+        return this.template("⚠️", "Still Conflicted", [
+          `${outcome.unresolvedFiles.length} file(s) still need manual resolution:`,
+          ...this.truncateBulletList(outcome.unresolvedFiles.map((file) => this.code(file))),
+          "",
+          "Resolve them by hand, then run /resume again.",
+        ]);
+    }
+  }
+
+  // /abort -- the fast, direct escape hatch; distinct wording from /recover
+  // and /resume above since it performs no plan and asks no questions.
+  formatAbortResult(outcome: { kind: "aborted"; operation: string } | { kind: "nothing-to-abort" }): string {
+    if (outcome.kind === "nothing-to-abort") {
+      return "✅ Nothing to abort -- no merge, rebase, cherry-pick, revert, or bisect is currently in progress.";
+    }
+    return this.template("🛑", "Aborted", [this.field("Operation", this.code(outcome.operation))]);
   }
 
   private shortId(id: string): string {

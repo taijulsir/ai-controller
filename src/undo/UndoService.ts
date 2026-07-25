@@ -67,6 +67,7 @@ export class UndoService implements IUndoService {
       filesToRestore,
       filesToDelete,
       beforeSnapshot: checkpoint.beforeSnapshot,
+      capturedAt: checkpoint.capturedAt,
     };
 
     if (conflictingFiles.length > 0) {

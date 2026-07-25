@@ -14,6 +14,13 @@ import { DeferredRuntimeControlService, RuntimeControlService } from "./control"
 import { DecisionEngine } from "./decisions";
 import { RuntimeDiagnosticsEngine } from "./diagnostics";
 import { DeferredExecutionStateReader, ExecutionStateTracker } from "./executionstate";
+import { ConflictResolutionEngine, IntelligentSyncEngine, MergeEngine, RebaseEngine } from "./gitengines";
+import { GitHealthService, RepositorySnapshotService } from "./git";
+import { AutomaticSafetyPolicies, CommandOrchestrator, DeferredApprovalGate, PreflightValidationPolicy } from "./gitorchestration";
+import { GitStateMachine, RepositoryStateAnalyzer } from "./gitstate";
+import { GitTransactionManager } from "./gittransaction";
+import { createOperationJournal } from "./journal";
+import { RecoveryPlanner, RepositoryRecoveryWorkflow } from "./recovery";
 import { RepositoryIntelligenceService } from "./intelligence";
 import { MemoryRecordingControllerCore, ProjectMemoryService } from "./memory";
 import { ProactiveMonitor, RecommendationStateStore } from "./monitoring";
@@ -48,8 +55,9 @@ import { ClaudeSessionManager } from "./session";
 import { EnvironmentValidator } from "./startup";
 import { DeferredRuntimeStatusService, RuntimeStatusService } from "./status";
 import { StrategyEngine } from "./strategy";
-import { UndoService } from "./undo";
+import { SafeUndoFramework, UndoService } from "./undo";
 import {
+  ApprovalGateAdapter,
   BOT_COMMANDS,
   NotifyingAutonomousExecutionOrchestrator,
   ResponseFormatter,
@@ -272,6 +280,58 @@ async function bootstrap(): Promise<void> {
   // exists at this exact point in the file, so it's constructed directly and
   // handed to ApplicationService as a single collaborator.
   const undoService = new UndoService(repositoryRegistry, deferredExecutionStateReader, projectMemory, projectMemory);
+
+  // Git Orchestration redesign: Foundation -> pure policies -> Engines ->
+  // Command Orchestrator, in the frozen dependency order. Built here, before
+  // ApplicationService (which needs gitHealthService/recoveryPlanner/
+  // repositoryRecoveryWorkflow/conflictResolutionEngine/safeUndoFramework
+  // for /health, /recover, /resume, and the git-native half of /undo) and
+  // reused as-is by workflowFactory further down. deferredApprovalGate is
+  // the seam every one of these needs at construction time but whose real
+  // delegate (an ApprovalGateAdapter wrapping telegramApprovalProvider) can
+  // only be built once telegramClient/telegramSecurity exist, further down —
+  // same shape as deferredApprovalPendingReader/deferredApprovalCanceller
+  // above, bound alongside them.
+  const repositoryStateAnalyzer = new RepositoryStateAnalyzer();
+  const repositorySnapshotService = new RepositorySnapshotService(repositoryRegistry);
+  const gitJournalDirectory =
+    controllerConfigForArtifacts.git_orchestration?.journal?.directory ??
+    path.join(path.dirname(controllerConfigForArtifacts.memory.directory), "git-journal");
+  const operationJournal = createOperationJournal(gitJournalDirectory);
+  const gitHealthService = new GitHealthService(repositoryRegistry, operationJournal);
+  const gitTransactionManager = new GitTransactionManager(repositorySnapshotService, operationJournal, repositoryRegistry);
+  const preflightValidationPolicy = new PreflightValidationPolicy();
+  const automaticSafetyPolicies = new AutomaticSafetyPolicies(configService);
+  const deferredApprovalGate = new DeferredApprovalGate();
+  const conflictResolutionEngine = new ConflictResolutionEngine(repositoryRegistry, deferredApprovalGate);
+  const rebaseEngine = new RebaseEngine(repositoryRegistry, gitTransactionManager, conflictResolutionEngine);
+  const mergeEngine = new MergeEngine(repositoryRegistry, gitTransactionManager, conflictResolutionEngine);
+  const intelligentSyncEngine = new IntelligentSyncEngine(
+    repositoryRegistry,
+    gitTransactionManager,
+    automaticSafetyPolicies,
+    deferredApprovalGate,
+    rebaseEngine,
+    mergeEngine,
+  );
+  const recoveryPlanner = new RecoveryPlanner(repositoryStateAnalyzer);
+  const commandOrchestrator = new CommandOrchestrator(
+    gitHealthService,
+    automaticSafetyPolicies,
+    preflightValidationPolicy,
+    recoveryPlanner,
+    deferredApprovalGate,
+    repositoryStateAnalyzer,
+    new GitStateMachine(),
+  );
+  const repositoryRecoveryWorkflow = new RepositoryRecoveryWorkflow(
+    repositoryRegistry,
+    gitHealthService,
+    repositoryStateAnalyzer,
+    deferredApprovalGate,
+  );
+  const safeUndoFramework = new SafeUndoFramework(operationJournal, repositoryRegistry, repositorySnapshotService, deferredApprovalGate);
+
   const applicationService = new ApplicationService(
     repositoryIntelligence,
     projectMemory,
@@ -297,6 +357,11 @@ async function bootstrap(): Promise<void> {
     deferredApprovalCanceller,
     taskCancellationPolicy,
     undoService,
+    gitHealthService,
+    recoveryPlanner,
+    repositoryRecoveryWorkflow,
+    conflictResolutionEngine,
+    safeUndoFramework,
     artifactModule.service,
     artifactModule.maintenance,
   );
@@ -323,7 +388,17 @@ async function bootstrap(): Promise<void> {
   const planningEngine = new PlanningEngine();
   const executionCoordinator = new ExecutionCoordinator();
 
-  const workflowFactory = new WorkflowFactory(configService, repositoryRegistry, sessionManager);
+  const workflowFactory = new WorkflowFactory(
+    configService,
+    repositoryRegistry,
+    sessionManager,
+    commandOrchestrator,
+    gitTransactionManager,
+    operationJournal,
+    intelligentSyncEngine,
+    rebaseEngine,
+    mergeEngine,
+  );
   // Phase B (Undo): both pure/stateless-per-call, no ordering constraint --
   // constructed directly, same as taskCancellationPolicy above.
   const undoCheckpointRecorder = new UndoCheckpointRecorder(repositoryRegistry);
@@ -630,6 +705,14 @@ async function bootstrap(): Promise<void> {
   // from "Waiting Approval" without this class's approval mechanics leaking
   // anywhere else.
   deferredApprovalPendingReader.bind(telegramApprovalProvider);
+  // Git Orchestration redesign: telegramApprovalProvider also implements
+  // IApprovalGateDelivery (requestGateApproval(), reusing the same
+  // pending/settle/timeout machinery as IApprovalProvider.requestApproval()
+  // above) -- bound via the same ApprovalGateAdapter->IApprovalGate bridge
+  // every git-native workflow, Engine, Recovery Workflow, and Safe Undo
+  // Framework has been holding a reference to (via deferredApprovalGate)
+  // since before this instance existed.
+  deferredApprovalGate.bind(new ApprovalGateAdapter(telegramApprovalProvider));
   // Phase A.2: telegramApprovalProvider also implements IApprovalCanceller
   // (reject(), a third caller of the exact same settle() its own
   // approve/reject button and timeout already use) — bound alongside

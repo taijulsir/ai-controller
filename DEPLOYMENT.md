@@ -23,8 +23,12 @@ A single long-running Node.js process (`node dist/index.js`) that:
   directory named `artifacts` sibling to `memory.directory`), one file plus a `.meta.json`
   sidecar per artifact, organized `YYYY/MM/DD/<id>.<ext>` — see
   [Filesystem requirements](#filesystem-requirements) and
-  [Backup guidance](#backup-guidance) below. Nothing else touches disk at runtime besides
-  reading `config/*.yaml`.
+  [Backup guidance](#backup-guidance) below.
+- writes one append-only JSONL file per repository under `git_orchestration.journal.directory`
+  (`config/controller.yaml`, optional — defaults to a directory named `git-journal` sibling to
+  `memory.directory`) — the Operation Journal audit trail for every git-native mutating command
+  (`/sync`, `/merge`, `/rebase`, `/commit`, `/push`, `/branch`, `/discard`). Nothing else touches
+  disk at runtime besides reading `config/*.yaml`.
 
 There is still no HTTP server and no database — the health-check mechanism (below) is
 file-based, deliberately, rather than adding a network port.
@@ -96,6 +100,11 @@ The process needs read access to `config/*.yaml`, and write access to:
   `/artifact delete <id> [id2] ...` for specific artifacts or `/artifact delete-all confirm`
   to clear everything at once — so growth is unbounded until an operator acts, and worth
   monitoring.
+- `git_orchestration.journal.directory` (`config/controller.yaml`, optional — see
+  [CONFIGURATION.md](./CONFIGURATION.md)) — must exist or be creatable; one JSONL file per
+  repository, created lazily on that repository's first git-native mutating command. Same
+  unbounded-growth caveat as `artifacts.directory` above — no automatic retention job runs
+  against it either.
 - every repository's `path` (`config/repositories.yaml`) — needs whatever access level the
   configured `git`/`claude`/`gh` CLIs need to operate on it (working tree writes, commits,
   pushes to its configured remote)
@@ -226,6 +235,12 @@ analyze/review/fix output, fix diffs, and original/updated file content live the
 else. Losing it loses that history (though not repository state itself — every fix artifact is
 a copy of content git already has, not the only copy). Back it up the same way if you want that
 history to survive a disk loss.
+
+`git_orchestration.journal.directory` is likewise **not** covered by `scripts/backup-memory.sh`.
+Losing it loses the Operation Journal's audit trail and disables `/undo` for git-native
+operations (`SafeUndoFramework` has nothing to read), but never loses repository state itself —
+every entry only ever references commits/refs git already has, never a second copy of file
+content. Back it up the same way if you want that undo history to survive a disk loss.
 
 ## Recovery procedures
 

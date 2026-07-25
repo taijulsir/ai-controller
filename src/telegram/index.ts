@@ -13,6 +13,7 @@ export { TelegramApiClient } from "./TelegramApiClient";
 export { TelegramSecurity } from "./TelegramSecurity";
 export { TelegramLongPoller } from "./TelegramLongPoller";
 export { TelegramApprovalProvider } from "./TelegramApprovalProvider";
+export { ApprovalGateAdapter } from "./ApprovalGateAdapter";
 export { TelegramAttentionTransport } from "./TelegramAttentionTransport";
 export { NotifyingAutonomousExecutionOrchestrator } from "./NotifyingAutonomousExecutionOrchestrator";
 export { ResponseFormatter } from "./ResponseFormatter";

@@ -12,6 +12,15 @@ const QUERY_COMMANDS: ReadonlySet<string> = new Set([
   "recommendations",
   "branches",
   "undo",
+  // Git Orchestration redesign: /health is a pure read; /recover, /resume,
+  // and /abort each trigger a targeted side effect while answering, the
+  // same way /task cancel and /undo already do despite being "query" kind
+  // -- none of them build a Task domain object or go through
+  // ExecutionPipeline.
+  "health",
+  "recover",
+  "resume",
+  "abort",
 ]);
 
 type TaskBuilder = (args: string) => Task;
@@ -60,6 +69,14 @@ export class CommandParser implements ICommandParser {
       if (!args) throw new CommandParseError('"merge" requires a branch name, e.g. "merge main".');
       return { type: "merge", input: { branch: args } };
     },
+    // Unlike "merge", a bare "/rebase" (no argument) is a common, safe
+    // request -- RebaseWorkflow itself resolves the branch's own configured
+    // upstream when "onto" is omitted (see RebaseTask's own doc comment).
+    rebase: (args) => ({ type: "rebase", input: args ? { onto: args } : undefined }),
+    // No pathspec form -- "/discard" always discards every uncommitted
+    // change (staged, unstaged, untracked) in one shot, matching
+    // DiscardWorkflow's own single-shot design.
+    discard: () => ({ type: "discard" }),
   };
 
   parse(text: string): ParsedCommand {
@@ -219,7 +236,7 @@ export class CommandParser implements ICommandParser {
     if (command === "runtime") {
       return this.buildRuntimeQuery(args);
     }
-    return { type: command as "status" | "insights" | "help" | "recommendations" | "branches" | "undo" };
+    return { type: command as "status" | "insights" | "help" | "recommendations" | "branches" | "undo" | "health" | "recover" | "resume" | "abort" };
   }
 
   // A bare "/task" (subcommand === "") behaves like the existing plain

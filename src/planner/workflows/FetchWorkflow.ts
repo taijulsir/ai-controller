@@ -1,18 +1,40 @@
 import type { IGitAdapter } from "../../git/interfaces";
+import type { ICommandOrchestrator } from "../../gitorchestration/interfaces";
+import { JournalOperationType } from "../../journal/types";
 import type { ITaskWorkflow } from "../interfaces";
 import type { Task, WorkflowResult } from "../types";
+import { runGated } from "./gitOrchestrationSupport";
 
-// The only one of the three new Git Operations workflows with no safety
-// precondition at all: fetch only updates remote-tracking refs
-// (e.g. origin/main), never the working tree, the index, or the current
-// branch -- there is nothing here for a dirty tree or detached HEAD to put
-// at risk.
+// Routed through Command Orchestrator for consistency with every other git
+// command, but never opens an IGitTransactionManager Transaction and is
+// never journaled: fetch only updates remote-tracking refs, never the
+// working tree, the index, or the current branch -- there is nothing to
+// roll back and nothing for Safe Undo Framework to reverse. Automatic
+// Safety Policies deliberately exempts fetch from the in-progress-operation
+// recommend-recovery short-circuit for the same reason (see its own
+// comment): fetch is safe to run even mid-merge/mid-rebase.
 export class FetchWorkflow implements ITaskWorkflow {
-  constructor(private readonly gitAdapter: IGitAdapter) {}
+  constructor(
+    private readonly gitAdapter: IGitAdapter,
+    private readonly commandOrchestrator: ICommandOrchestrator,
+    private readonly repositoryId: string,
+    private readonly correlationId: string,
+  ) {}
 
   async execute(_task: Task, _signal: AbortSignal): Promise<WorkflowResult> {
-    await this.gitAdapter.fetch();
-    const status = await this.gitAdapter.status();
-    return { success: true, output: `Fetched. "${status.branch}" is now ${status.ahead} ahead, ${status.behind} behind its upstream.` };
+    return runGated(
+      this.commandOrchestrator,
+      {
+        operation: JournalOperationType.Fetch,
+        repositoryId: this.repositoryId,
+        correlationId: this.correlationId,
+        run: async () => {
+          await this.gitAdapter.fetch();
+          const status = await this.gitAdapter.status();
+          return `Fetched. "${status.branch}" is now ${status.ahead} ahead, ${status.behind} behind its upstream.`;
+        },
+      },
+      (message) => message,
+    );
   }
 }

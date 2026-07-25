@@ -19,6 +19,12 @@ import type { IRuntimeDiagnosticsEngine } from "../diagnostics/interfaces";
 import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { IExecutionStateReader } from "../executionstate/interfaces";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
+import { GitAdapter } from "../git/GitAdapter";
+import type { IGitHealthService } from "../git/interfaces";
+import type { InProgressOperationKind, RepositoryHealthReport } from "../git/types";
+import type { IConflictResolutionEngine } from "../gitengines/interfaces";
+import { ConflictResolutionMode } from "../gitengines/types";
+import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
@@ -40,6 +46,8 @@ import type { IAutonomousPlanSchedulingEngine } from "../scheduling/interfaces";
 import type { AutonomousPlanSchedulingReport } from "../scheduling/types";
 import type { IRecommendationEngine } from "../recommendations/interfaces";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
+import type { IRecoveryPlanner, IRepositoryRecoveryWorkflow } from "../recovery/interfaces";
+import type { RecoveryOutcome } from "../recovery/types";
 import type { IRepositoryRegistry } from "../repositories/interfaces";
 import type { IRuntimeReportingEngine } from "../reporting/interfaces";
 import type { RuntimeReport } from "../reporting/types";
@@ -48,7 +56,7 @@ import { deriveSessionLifecycleState } from "../session/SessionLifecycle";
 import type { SessionReport, SessionStopOutcome } from "../session/types";
 import type { IRuntimeStatusService } from "../status/interfaces";
 import type { RuntimeStatus } from "../status/types";
-import type { IUndoService } from "../undo/interfaces";
+import type { ISafeUndoFramework, IUndoService } from "../undo/interfaces";
 import type { UndoOutcome } from "../undo/types";
 import type { EngineeringWorkspace } from "../workspace/types";
 import { NoActiveRepositoryError } from "./errors";
@@ -183,6 +191,19 @@ export class ApplicationService implements IApplicationService {
     // projectMemory instance passed in above), so no new ordering-constraint
     // seam is needed here at all.
     private readonly undoService: IUndoService,
+    // Git Orchestration redesign: /undo now compares this UndoService plan
+    // against a Safe Undo Framework plan and acts on whichever is more
+    // recent -- see undoLastExecution() below. gitHealthService/
+    // recoveryPlanner/repositoryRecoveryWorkflow/conflictResolutionEngine
+    // back the new /health, /recover, and /resume commands respectively;
+    // /abort needs no new dependency of its own (it only needs
+    // gitHealthService, already listed here, plus a GitAdapter it builds
+    // per-call the same way WorkflowFactory's own buildGitAdapter() does).
+    private readonly gitHealthService: IGitHealthService,
+    private readonly recoveryPlanner: IRecoveryPlanner,
+    private readonly repositoryRecoveryWorkflow: IRepositoryRecoveryWorkflow,
+    private readonly conflictResolutionEngine: IConflictResolutionEngine,
+    private readonly safeUndoFramework: ISafeUndoFramework,
     // Artifact Management: the same single ArtifactService/maintenance pair
     // src/index.ts constructs via createArtifactModule() for TaskArtifactRecorder
     // -- this class never constructs or rebuilds its own, it only exposes
@@ -337,20 +358,111 @@ export class ApplicationService implements IApplicationService {
   // Reuses the same resolveRepositoryId() convention as every other method
   // here, so /undo behaves identically to /status, /branch, /recommendations,
   // and /task.
+  //
+  // Git Orchestration redesign: /undo's single command surface now spans
+  // two independent undo mechanisms -- the tree-content one above
+  // (Claude-editing tasks) and Safe Undo Framework's ref-based one
+  // (git-native operations: sync/merge/rebase/commit/push/branch/discard).
+  // Both plans are built in parallel and compared by timestamp
+  // (UndoPlan.capturedAt vs. GitUndoPlan.recordedAt); whichever is more
+  // recent is the one actually undone. A real, in-progress Claude execution
+  // still takes priority over any comparison -- UndoService.buildUndoPlan()
+  // already reports "execution-in-progress" before either timestamp can be
+  // compared.
   async undoLastExecution(repositoryId?: string): Promise<UndoOutcome> {
     const resolvedId = this.resolveRepositoryId(repositoryId);
-    const plan = await this.undoService.buildUndoPlan(resolvedId);
+    const [taskPlan, gitPlan] = await Promise.all([
+      this.undoService.buildUndoPlan(resolvedId),
+      this.safeUndoFramework.buildUndoPlan(resolvedId),
+    ]);
 
-    switch (plan.status) {
+    if (taskPlan.status === "execution-in-progress") {
+      return { kind: "execution-in-progress" };
+    }
+
+    const preferGit = gitPlan !== undefined && (taskPlan.capturedAt === undefined || gitPlan.recordedAt > taskPlan.capturedAt);
+    if (preferGit && gitPlan) {
+      await this.safeUndoFramework.executeUndoPlan(gitPlan);
+      return { kind: "git-undone", operation: gitPlan.operation };
+    }
+
+    switch (taskPlan.status) {
       case "nothing-to-undo":
         return { kind: "nothing-to-undo" };
-      case "execution-in-progress":
-        return { kind: "execution-in-progress" };
       case "drift-detected":
-        return { kind: "drift-detected", checkpointId: plan.checkpointId!, taskType: plan.taskType!, conflictingFiles: plan.conflictingFiles };
+        return { kind: "drift-detected", checkpointId: taskPlan.checkpointId!, taskType: taskPlan.taskType!, conflictingFiles: taskPlan.conflictingFiles };
       case "ready":
-        return this.undoService.executeUndoPlan(plan);
+        return this.undoService.executeUndoPlan(taskPlan);
     }
+  }
+
+  // Git Orchestration redesign: /health -- a direct pass-through to Git
+  // Health Service, no synthesis of its own.
+  async getRepositoryHealth(repositoryId?: string): Promise<RepositoryHealthReport> {
+    return this.gitHealthService.getHealth(this.resolveRepositoryId(repositoryId));
+  }
+
+  // /recover -- builds a plan from the live health report and, when one
+  // exists, executes it immediately. AbortController is created fresh here
+  // rather than threaded in from a caller: unlike a Claude-editing task,
+  // recovery steps are all fast, local git operations with no long-running
+  // process to cancel mid-flight, so there is nothing for an external
+  // signal to usefully abort.
+  async recoverRepository(repositoryId?: string): Promise<RecoveryOutcome | { kind: "nothing-to-recover" }> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const report = await this.gitHealthService.getHealth(resolvedId);
+    const plan = this.recoveryPlanner.plan(report);
+    if (!plan) {
+      return { kind: "nothing-to-recover" };
+    }
+    return this.repositoryRecoveryWorkflow.execute(plan, new AbortController().signal);
+  }
+
+  // /resume -- only meaningful while a merge/rebase is actually in
+  // progress; ConflictResolutionEngine.analyze() has no opinion on that
+  // itself (it simply reports zero conflicted files when nothing is
+  // in-progress), so that check happens here first.
+  async resumeRepositoryOperation(repositoryId?: string): Promise<ConflictResolutionOutcome | { kind: "nothing-to-resume" }> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const report = await this.gitHealthService.getHealth(resolvedId);
+    if (!report.inProgressOperation) {
+      return { kind: "nothing-to-resume" };
+    }
+    const conflictReport = await this.conflictResolutionEngine.analyze(resolvedId);
+    return this.conflictResolutionEngine.resolve(resolvedId, conflictReport, ConflictResolutionMode.Auto);
+  }
+
+  // /abort -- the fast, direct escape hatch: no plan, no approval gate, no
+  // re-validation step, unlike /recover. Dispatches straight to the
+  // matching native git abort command for whatever is actually in progress.
+  async abortRepositoryOperation(
+    repositoryId?: string,
+  ): Promise<{ kind: "aborted"; operation: InProgressOperationKind } | { kind: "nothing-to-abort" }> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const report = await this.gitHealthService.getHealth(resolvedId);
+    if (!report.inProgressOperation) {
+      return { kind: "nothing-to-abort" };
+    }
+    const gitAdapter = new GitAdapter(this.repositoryRegistry, resolvedId);
+    const operation = report.inProgressOperation.kind;
+    switch (operation) {
+      case "merge":
+        await gitAdapter.abortMerge();
+        break;
+      case "rebase":
+        await gitAdapter.abortRebase();
+        break;
+      case "cherry-pick":
+        await gitAdapter.abortCherryPick();
+        break;
+      case "revert":
+        await gitAdapter.abortRevert();
+        break;
+      case "bisect":
+        await gitAdapter.abortBisect();
+        break;
+    }
+    return { kind: "aborted", operation };
   }
 
   // Fetches the snapshot and analyzes it exactly once, then hands both —

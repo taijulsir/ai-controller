@@ -86,4 +86,43 @@ export const GitCommand = {
   // edits) -- this is git's own correct, atomic tool for an in-progress
   // merge specifically.
   abortMerge: (): string[] => ["merge", "--abort"],
+
+  // Git Health Service primitives (Phase 0 freeze, foundation layer) -- every
+  // one below is read-only, matching GitAdapter's existing "mechanism, never
+  // judgment" contract exactly like the commands above it.
+  headSha: (): string[] => ["rev-parse", "HEAD"],
+  gitDir: (): string[] => ["rev-parse", "--git-dir"],
+  hasUpstreamConfigured: (branch: string): string[] => ["config", "--get", `branch.${branch}.merge`],
+  upstreamRef: (): string[] => ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+  stashList: (): string[] => ["stash", "list"],
+  worktreeList: (): string[] => ["worktree", "list", "--porcelain"],
+  submoduleStatus: (): string[] => ["submodule", "status"],
+  isShallowRepository: (): string[] => ["rev-parse", "--is-shallow-repository"],
+  rebaseOnto: (ontoRef: string): string[] => ["rebase", ontoRef],
+  abortRebase: (): string[] => ["rebase", "--abort"],
+  continueRebase: (): string[] => ["rebase", "--continue"],
+  abortCherryPick: (): string[] => ["cherry-pick", "--abort"],
+  abortRevert: (): string[] => ["revert", "--abort"],
+  fsck: (): string[] => ["fsck", "--no-dangling"],
+  cleanForce: (): string[] => ["clean", "-fd"],
+  resetHard: (ref: string): string[] => ["reset", "--hard", ref],
+  resetSoft: (ref: string): string[] => ["reset", "--soft", ref],
+  deleteBranch: (branch: string): string[] => ["branch", "-D", branch],
+  forcePushWithLease: (): string[] => ["push", "--force-with-lease"],
+  revertCommit: (ref: string): string[] => ["revert", "--no-edit", ref],
+  // Directly lists only unmerged (conflicted) paths -- simpler and more
+  // reliable than re-deriving them from full `status --porcelain=v2` output
+  // (which GitStatusParser already buckets into staged/unstaged without
+  // preserving a distinct "unmerged" list).
+  listConflictedFiles: (): string[] => ["diff", "--name-only", "--diff-filter=U"],
+  // --numstat reports "-\t-\t<path>" for a binary file (both counts are "-")
+  // and real numeric add/delete counts for a text file -- the standard,
+  // reliable way to tell them apart without guessing from a file extension.
+  conflictedFilesNumstat: (): string[] => ["diff", "--numstat", "--diff-filter=U"],
+  // --no-edit accepts git's own auto-generated merge message non-interactively
+  // -- required after resolving a conflict, since a plain `commit` with no
+  // message would otherwise try to open an editor and hang.
+  commitNoEdit: (): string[] => ["commit", "--no-edit"],
+  countCommitsBetween: (from: string, to: string): string[] => ["rev-list", "--count", `${from}..${to}`],
+  bisectReset: (): string[] => ["bisect", "reset"],
 } as const;

@@ -10,7 +10,7 @@ import { GitCommandError, NoActiveRepositoryError } from "./errors";
 import { parseGitLog } from "./GitLogParser";
 import { parseGitStatus } from "./GitStatusParser";
 import type { IGitAdapter } from "./interfaces";
-import type { CommitSummary, GitFileChange, GitStatus } from "./types";
+import type { CommitSummary, GitFileChange, GitStatus, SubmoduleStatus, WorktreeInfo } from "./types";
 
 export class GitAdapter implements IGitAdapter {
   constructor(
@@ -169,6 +169,176 @@ export class GitAdapter implements IGitAdapter {
 
   async abortMerge(): Promise<void> {
     await this.run(GitCommand.abortMerge());
+  }
+
+  async headSha(): Promise<string> {
+    return this.run(GitCommand.headSha());
+  }
+
+  async gitDir(): Promise<string> {
+    const repository = this.resolveRepository();
+    const output = await this.run(GitCommand.gitDir());
+    return path.resolve(repository.path, output);
+  }
+
+  async hasUpstreamConfigured(branch: string): Promise<boolean> {
+    try {
+      await this.run(GitCommand.hasUpstreamConfigured(branch));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async upstreamRef(): Promise<string | undefined> {
+    try {
+      return await this.run(GitCommand.upstreamRef());
+    } catch {
+      return undefined;
+    }
+  }
+
+  async stashCount(): Promise<number> {
+    const output = await this.run(GitCommand.stashList());
+    return output.length === 0 ? 0 : output.split("\n").filter((line) => line.trim().length > 0).length;
+  }
+
+  // Parses `git worktree list --porcelain`: records separated by blank
+  // lines, each a "worktree <path>" line followed by "HEAD <sha>" and either
+  // "branch <ref>" or the literal "detached".
+  async listWorktrees(): Promise<WorktreeInfo[]> {
+    const repository = this.resolveRepository();
+    const output = await this.run(GitCommand.worktreeList());
+    const currentPath = path.resolve(repository.path);
+
+    return output
+      .split(/\n\n+/)
+      .map((record) => record.trim())
+      .filter((record) => record.length > 0)
+      .map((record) => {
+        const lines = record.split("\n");
+        const worktreeLine = lines.find((line) => line.startsWith("worktree "));
+        const branchLine = lines.find((line) => line.startsWith("branch "));
+        const worktreePath = worktreeLine ? worktreeLine.slice("worktree ".length).trim() : "";
+        const branch = branchLine ? branchLine.slice("branch ".length).replace(/^refs\/heads\//, "").trim() : undefined;
+        return {
+          path: worktreePath,
+          branch,
+          isCurrent: path.resolve(worktreePath) === currentPath,
+        };
+      });
+  }
+
+  // Parses `git submodule status`: a one-character status prefix per line --
+  // ' ' clean, '+' dirty (checked-out commit differs from the index), '-'
+  // not initialized, 'U' merge conflict (treated as dirty, the same
+  // conservative bucket a real conflict inside a submodule belongs in).
+  async listSubmodules(): Promise<SubmoduleStatus[]> {
+    const output = await this.run(GitCommand.submoduleStatus());
+    return output
+      .split("\n")
+      .map((line) => line)
+      .filter((line) => line.trim().length > 0)
+      .map((line) => {
+        const prefix = line[0];
+        const rest = line.slice(1).trim();
+        const submodulePath = rest.split(/\s+/)[1] ?? rest.split(/\s+/)[0];
+        return {
+          path: submodulePath,
+          isDirty: prefix === "+" || prefix === "U",
+          isDetached: false,
+          initialized: prefix !== "-",
+        };
+      });
+  }
+
+  async isShallowRepository(): Promise<boolean> {
+    const output = await this.run(GitCommand.isShallowRepository());
+    return output.trim() === "true";
+  }
+
+  async fsck(): Promise<{ clean: boolean; output: string }> {
+    try {
+      const output = await this.run(GitCommand.fsck());
+      return { clean: output.trim().length === 0, output };
+    } catch (error) {
+      const output = error instanceof GitCommandError ? error.message : String(error);
+      return { clean: false, output };
+    }
+  }
+
+  async rebase(ontoRef: string): Promise<void> {
+    await this.run(GitCommand.rebaseOnto(ontoRef));
+  }
+
+  async abortRebase(): Promise<void> {
+    await this.run(GitCommand.abortRebase());
+  }
+
+  async continueRebase(): Promise<void> {
+    await this.run(GitCommand.continueRebase());
+  }
+
+  async abortCherryPick(): Promise<void> {
+    await this.run(GitCommand.abortCherryPick());
+  }
+
+  async abortRevert(): Promise<void> {
+    await this.run(GitCommand.abortRevert());
+  }
+
+  async abortBisect(): Promise<void> {
+    await this.run(GitCommand.bisectReset());
+  }
+
+  async cleanWorkingTree(): Promise<void> {
+    await this.run(GitCommand.cleanForce());
+  }
+
+  async resetHard(ref: string): Promise<void> {
+    await this.run(GitCommand.resetHard(ref));
+  }
+
+  async resetSoft(ref: string): Promise<void> {
+    await this.run(GitCommand.resetSoft(ref));
+  }
+
+  async deleteBranch(branch: string): Promise<void> {
+    await this.run(GitCommand.deleteBranch(branch));
+  }
+
+  async forcePushWithLease(): Promise<void> {
+    await this.run(GitCommand.forcePushWithLease());
+  }
+
+  async revertCommit(ref: string): Promise<void> {
+    await this.run(GitCommand.revertCommit(ref));
+  }
+
+  async commitNoEdit(): Promise<void> {
+    await this.run(GitCommand.commitNoEdit());
+  }
+
+  async countCommitsBetween(from: string, to: string): Promise<number> {
+    const output = await this.run(GitCommand.countCommitsBetween(from, to));
+    return Number.parseInt(output.trim(), 10) || 0;
+  }
+
+  async listConflictedFiles(): Promise<string[]> {
+    const output = await this.run(GitCommand.listConflictedFiles());
+    return output.split("\n").map((line) => line.trim()).filter((line) => line.length > 0);
+  }
+
+  async conflictedFilesAreBinary(): Promise<Map<string, boolean>> {
+    const output = await this.run(GitCommand.conflictedFilesNumstat());
+    const result = new Map<string, boolean>();
+    for (const line of output.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const [added, deleted, ...pathParts] = trimmed.split("\t");
+      result.set(pathParts.join("\t"), added === "-" && deleted === "-");
+    }
+    return result;
   }
 
   private mapDiffStatus(statusCode: string): GitFileChange["status"] {

@@ -61,62 +61,25 @@ export class TaskCancellerNotBoundError extends Error {
   }
 }
 
-export class UnsafeBranchSwitchError extends Error {
-  constructor(branch: string, staged: number, unstaged: number, untracked: number) {
-    super(
-      `Cannot switch to "${branch}": the working tree has uncommitted changes ` +
-        `(${staged} staged, ${unstaged} unstaged, ${untracked} untracked). Commit or discard them first.`,
-    );
-    this.name = "UnsafeBranchSwitchError";
-  }
-}
+// Deviation from the Phase 0 freeze, noted in the implementation report:
+// UnsafeBranchSwitchError, UnsafeGitOperationError, DetachedHeadError,
+// DivergedBranchError, SameBranchMergeError, and MergeConflictError were
+// removed from here during the git-orchestration retrofit. Every one was a
+// workflow's own hand-rolled precondition/conflict check, now replaced
+// uniformly by Pre-flight Validation Policy (PreflightValidationFailedError,
+// src/gitorchestration/errors.ts) and the Engines' own ConflictReport-based
+// outcomes -- exactly the "replace duplicated validation with the new
+// validation layer" requirement, not a stylistic removal. Confirmed unused
+// (grep across src/) before deletion.
 
-// Phase D (Git Operations) -- SyncWorkflow/MergeWorkflow's own safety checks,
-// same reasoning as UnsafeBranchSwitchError above: reads GitStatus.isClean
-// itself, before attempting anything, rather than depending on git's own
-// refusal or discovering a conflict mid-operation.
-export class UnsafeGitOperationError extends Error {
-  constructor(operation: string, staged: number, unstaged: number, untracked: number) {
-    super(
-      `Cannot ${operation}: the working tree has uncommitted changes ` +
-        `(${staged} staged, ${unstaged} unstaged, ${untracked} untracked). Commit or discard them first.`,
-    );
-    this.name = "UnsafeGitOperationError";
-  }
-}
-
-export class DetachedHeadError extends Error {
-  constructor(operation: string) {
-    super(`Cannot ${operation}: HEAD is detached, not on a branch.`);
-    this.name = "DetachedHeadError";
-  }
-}
-
-// /sync's own deliberate limit: it only ever fast-forwards or refuses, never
-// creates a merge commit -- when the local branch and its upstream have
-// genuinely diverged, this is thrown to redirect the user to the explicit,
-// conflict-aware /merge instead of silently doing something more complex.
-export class DivergedBranchError extends Error {
+// Thrown only when /rebase is given no explicit target and the branch also
+// has no configured upstream to default to -- SyncWorkflow's "@{upstream}"
+// shorthand has the same failure mode, but lets git itself produce the
+// error; RebaseWorkflow checks explicitly instead, since IGitAdapter.rebase()
+// takes a resolved ref, not git's own "@{upstream}" shorthand.
+export class NoUpstreamConfiguredError extends Error {
   constructor(branch: string) {
-    super(`Cannot sync "${branch}": it has diverged from its upstream. Use /merge to merge deliberately.`);
-    this.name = "DivergedBranchError";
-  }
-}
-
-export class SameBranchMergeError extends Error {
-  constructor(branch: string) {
-    super(`Cannot merge "${branch}" into itself.`);
-    this.name = "SameBranchMergeError";
-  }
-}
-
-// Thrown only after MergeWorkflow has already run `git merge --abort` --
-// the repository is guaranteed back in its pre-merge state by the time a
-// caller ever sees this, never left with conflict markers or a
-// half-finished merge.
-export class MergeConflictError extends Error {
-  constructor(sourceBranch: string, targetBranch: string) {
-    super(`Merging "${sourceBranch}" into "${targetBranch}" produced conflicts. The merge was aborted; nothing was changed.`);
-    this.name = "MergeConflictError";
+    super(`Cannot rebase "${branch}": no target was given and it has no configured upstream to default to.`);
+    this.name = "NoUpstreamConfiguredError";
   }
 }

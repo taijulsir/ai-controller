@@ -213,6 +213,14 @@ export class TelegramAdapter implements ITelegramAdapter {
         return this.responseFormatter.formatCancelResult(this.applicationService.cancelCurrentTask(repositoryId));
       case "undo":
         return this.responseFormatter.formatUndoResult(await this.applicationService.undoLastExecution(repositoryId));
+      case "health":
+        return this.responseFormatter.formatRepositoryHealth(await this.applicationService.getRepositoryHealth(repositoryId));
+      case "recover":
+        return this.responseFormatter.formatRecoveryResult(await this.applicationService.recoverRepository(repositoryId));
+      case "resume":
+        return this.responseFormatter.formatResumeResult(await this.applicationService.resumeRepositoryOperation(repositoryId));
+      case "abort":
+        return this.responseFormatter.formatAbortResult(await this.applicationService.abortRepositoryOperation(repositoryId));
       case "runtime-report":
         return this.responseFormatter.formatRuntimeReport(this.applicationService.getRuntimeReport());
       case "runtime-status":

@@ -31,6 +31,8 @@ const BYPASS_TASK_TYPES: ReadonlySet<Task["type"]> = new Set([
   "fetch",
   "sync",
   "merge",
+  "rebase",
+  "discard",
 ]);
 
 // A step's translation into real work: either a ready ExecutionRequest, a

@@ -15,7 +15,9 @@ export type TaskType =
   | "create-branch"
   | "fetch"
   | "sync"
-  | "merge";
+  | "merge"
+  | "rebase"
+  | "discard";
 
 export interface AnalyzeRepositoryTask {
   type: "analyze-repository";
@@ -91,6 +93,20 @@ export interface MergeTask {
   input: { branch: string };
 }
 
+// "onto" is optional (unlike MergeTask.input.branch, which CommandParser
+// always requires): a bare "/rebase" with no argument is a common, safe
+// request -- "rebase onto whatever my branch already tracks" -- so
+// RebaseWorkflow itself resolves it via IGitAdapter.upstreamRef() when
+// omitted, the same way SyncWorkflow always targets "@{upstream}" today.
+export interface RebaseTask {
+  type: "rebase";
+  input?: { onto?: string };
+}
+
+export interface DiscardTask {
+  type: "discard";
+}
+
 export type Task =
   | AnalyzeRepositoryTask
   | ExplainCodeTask
@@ -106,7 +122,9 @@ export type Task =
   | CreateBranchTask
   | FetchTask
   | SyncTask
-  | MergeTask;
+  | MergeTask
+  | RebaseTask
+  | DiscardTask;
 
 export interface TaskExecutionContext {
   repositoryId?: string;

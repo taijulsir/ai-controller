@@ -7,7 +7,7 @@
 
 ## Task types and workflows
 
-`Task` is a closed, 15-variant union (`src/planner/types.ts`). `WorkflowFactory` maps each to
+`Task` is a closed, 17-variant union (`src/planner/types.ts`). `WorkflowFactory` maps each to
 exactly one workflow class:
 
 | Task type | Workflow class | Behavior |
@@ -18,19 +18,41 @@ exactly one workflow class:
 | `implement-feature` | `ImplementFeatureWorkflow` | Requires `input.description`; prompts Claude to implement it |
 | `fix-bug` | `FixBugWorkflow` | Requires `input.description`; prompts Claude to fix it |
 | `verify-git-status` | `GitStatusWorkflow` | Calls `GitAdapter.status()`, formats a human-readable summary — no Claude/GitHub call |
-| `create-commit` | `CreateCommitWorkflow` | Requires `input.message`; `gitAdapter.stageAll()` then `gitAdapter.commit(message)` — stages everything, not selectively |
-| `push-changes` | `PushChangesWorkflow` | `gitAdapter.push()` |
 | `create-pull-request` | `CreatePullRequestWorkflow` | Requires `input.title`; resolves base branch, rejects if current branch equals base, else `githubAdapter.createPullRequest()` |
 | `list-pull-requests` | `ListPullRequestsWorkflow` | `githubAdapter.listOpenPullRequests()`, formatted |
-| `switch-branch` | `SwitchBranchWorkflow` | Requires `input.branch`; rejects a dirty working tree, else `gitAdapter.checkout()` |
-| `create-branch` | `CreateBranchWorkflow` | Requires `input.branch`; `gitAdapter.createBranch()` — no dirty-tree check, since `checkout -b` carries uncommitted changes forward safely |
-| `fetch` | `FetchWorkflow` | `gitAdapter.fetch()` — no precondition; only updates remote-tracking refs, never the working tree |
-| `sync` | `SyncWorkflow` | Rejects detached HEAD or a dirty tree; fetches, then fast-forwards only (`isAncestor` against `@{upstream}`) — never merges or rebases |
-| `merge` | `MergeWorkflow` | Requires `input.branch`; rejects detached HEAD, merging a branch into itself, or a dirty tree; fast-forwards when possible, else attempts a real merge commit and runs `gitAdapter.abortMerge()` on any conflict |
 
 The five Claude-backed workflows (`analyze-repository`, `review-code`, `explain-code`,
 `implement-feature`, `fix-bug`) resolve `shouldContinueSession` via
 `ClaudeSessionManager.resolveSession()` — `WorkflowFactory` never decides this itself.
+
+### Git-native task types (Git Orchestration redesign)
+
+Every git-mutating task type (all nine below, plus `fetch`) now routes through
+**Command Orchestrator** (`src/gitorchestration/CommandOrchestrator.ts`) before its workflow's
+`run()` closure is ever called: it fetches a `RepositoryHealthReport`
+(`GitHealthService.getHealth()`), classifies the operation via **Automatic Safety Policies**
+(continue automatically / request approval / recommend recovery), validates it via
+**Pre-flight Validation Policy** (the one place `NotDetachedHead`/`WorkingTreeClean`/
+`TargetNotCurrentBranch`/etc. are decided — no workflow below duplicates these checks itself
+anymore), and only then runs it. See [architecture.md](./architecture.md) for the full
+Foundation → Core Infra → Engines → Orchestration component breakdown.
+
+| Task type | Workflow class | Behavior |
+|---|---|---|
+| `create-commit` | `CreateCommitWorkflow` | `gitAdapter.stageAll()` then `gitAdapter.commit(message)`, wrapped in a `GitTransactionManager` Transaction (`rollbackStrategy: "reset-soft"` — undoing a commit keeps the diff staged, never discards it) |
+| `push-changes` | `PushChangesWorkflow` | `gitAdapter.push()`; journals directly (no Transaction — push doesn't move local HEAD), `rollbackStrategy: "revert-and-force-push-with-lease"` |
+| `switch-branch` | `SwitchBranchWorkflow` | `gitAdapter.checkout()`; journals directly, `rollbackStrategy: "switch-back-to-branch"` |
+| `create-branch` | `CreateBranchWorkflow` | `gitAdapter.createBranch()` — still no dirty-tree check, `checkout -b` carries uncommitted changes forward safely; journals directly, `rollbackStrategy: "delete-branch"` |
+| `fetch` | `FetchWorkflow` | `gitAdapter.fetch()` — routed through Command Orchestrator for consistency, but never journaled (nothing to undo) and exempt from the in-progress-operation recommend-recovery check (fetch never touches the working tree) |
+| `sync` | `SyncWorkflow` → `IntelligentSyncEngine` | Fast-forwards when possible; on genuine divergence, delegates to `RebaseEngine`/`MergeEngine` per the configured `divergence_strategy` (`rebase` by default, or `merge`, or `ask` for an approval prompt) instead of refusing |
+| `merge` | `MergeWorkflow` → `MergeEngine` | Fast-forwards when possible, else attempts a real merge commit; on conflict, leaves the merge in progress (via `ConflictResolutionEngine`) rather than auto-aborting — `/resume` or `/abort` handle it from there |
+| `rebase` | `RebaseWorkflow` → `RebaseEngine` | New command. Rebases onto `input.onto`, or the branch's own upstream if omitted; same conflict handling as `merge` above. Always approval-gated, regardless of config |
+| `discard` | `DiscardWorkflow` | New command. Discards all uncommitted changes (`resetHard` + `cleanWorkingTree`), wrapped in a Transaction with `rollbackStrategy: "restore-tree"` — a pre-discard snapshot is what makes `/undo` able to reverse it |
+
+`/health`, `/recover`, `/resume`, and `/abort` are **not** task types — they're `query`-kind
+commands answered directly by `ApplicationService` (`getRepositoryHealth`/`recoverRepository`/
+`resumeRepositoryOperation`/`abortRepositoryOperation`), the same pattern `/undo` already used.
+See [TELEGRAM_COMMANDS.md](./TELEGRAM_COMMANDS.md) for user-facing behavior.
 
 ## TaskPlanner
 
@@ -144,12 +166,12 @@ only thing that actually executes anything.
 `PipelineRequest` is `{kind: "task", task, ...}` or `{kind: "pipeline", message, ...}` — the
 kind describes *how the request is processed*, not what it dispatches. `"pipeline"` kind
 (today: only `/ship`) is **never** bypass-eligible; `"task"` kind is bypass-eligible only for
-eight task types.
+ten task types (eight, plus `rebase`/`discard` added by the Git Orchestration redesign).
 
 ```mermaid
 flowchart TD
     Start["PipelineRequest"] --> Kind{"kind?"}
-    Kind -->|task, type in\ncreate-commit/push-changes/create-pull-request/\nswitch-branch/create-branch/fetch/sync/merge| Bypass["Bypass:\ndirect ControllerCore.execute()"]
+    Kind -->|task, type in\ncreate-commit/push-changes/create-pull-request/\nswitch-branch/create-branch/fetch/sync/merge/\nrebase/discard| Bypass["Bypass:\ndirect ControllerCore.execute()"]
     Kind -->|task, other type| Full
     Kind -->|pipeline| Full["Full path"]
     Full --> Strategy["StrategyEngine.recommend()\n→ TaskExecutionStrategy"]
@@ -161,15 +183,18 @@ flowchart TD
 ```
 
 **Bypass**: `create-commit`, `push-changes`, `create-pull-request`, `switch-branch`,
-`create-branch`, `fetch`, `sync`, and `merge` task-kind requests skip Strategy/Planning/
-Coordination entirely and call `ControllerCore.execute()` directly. The first three would
-otherwise collapse into a `"ShipChanges"` recommendation built to judge integrated-delivery
-*intent*, misjudging a bare standalone `/push`; the five git-operation types have no
-`StrategyEngine` category at all — they're local, non-shipping git operations the cascade was
-never built to reason about. Bypass-eligible requests still flow exclusively through
-`ExecutionPipeline` and still reach `ControllerCore` only through it — so `ApprovalEngine`
-still applies identically either way (which is how `merge`'s own approval gate still applies
-even though it bypasses Strategy/Planning/Coordination).
+`create-branch`, `fetch`, `sync`, `merge`, `rebase`, and `discard` task-kind requests skip
+Strategy/Planning/Coordination entirely and call `ControllerCore.execute()` directly. The first
+three would otherwise collapse into a `"ShipChanges"` recommendation built to judge
+integrated-delivery *intent*, misjudging a bare standalone `/push`; the seven git-operation
+types have no `StrategyEngine` category at all — they're local, non-shipping git operations the
+cascade was never built to reason about. Bypass-eligible requests still flow exclusively
+through `ExecutionPipeline` and still reach `ControllerCore` only through it — so
+`ApprovalEngine` still applies identically either way (which is how `merge`'s/`rebase`'s own
+approval gate still applies even though they bypass Strategy/Planning/Coordination). For the
+git-native types specifically, this is on top of — not instead of — the same gating Command
+Orchestrator itself performs one layer down inside `TaskPlanner`/`WorkflowFactory`; see
+[architecture.md](./architecture.md).
 
 **`StrategyEngine.recommend()`** — 6 possible `RecommendedAction` values, decided in order:
 
@@ -178,8 +203,13 @@ even though it bypasses Strategy/Planning/Coordination).
 2. `approvalExpectation.expected` → `WaitForApproval` (advisory only — mirrors, but does not
    itself enforce, `ApprovalPolicy`; `ApprovalEngine` remains the sole authority)
 3. Else, by task type:
-   - `create-commit` / `push-changes` / `create-pull-request` → `ShipChanges`
-   - `analyze-repository` / `explain-code` / `list-pull-requests` / `verify-git-status` → `AnalyzeFirst`
+   - `create-commit` / `push-changes` / `create-pull-request` / `switch-branch` /
+     `create-branch` / `sync` / `merge` / `rebase` / `discard` → `ShipChanges` (all mutate git
+     state, so they stay subject to the same critical-insight readiness gate above as every
+     other mutating task, even though this branch is unreachable in practice for the
+     bypass-eligible ones — see step 3 above)
+   - `analyze-repository` / `explain-code` / `list-pull-requests` / `verify-git-status` /
+     `review-code` / `fetch` → `AnalyzeFirst`
    - `implement-feature` / `fix-bug`: active session → `ContinueCurrentTask`; else on the
      default branch → `CreateFeatureBranch`; else → `ContinueCurrentTask`
 
