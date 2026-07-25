@@ -2,10 +2,24 @@ export const GIT_BINARY = "git";
 
 export const DEFAULT_RECENT_COMMITS_LIMIT = 5;
 
+// Git History & Inspection System (/history): distinct from
+// DEFAULT_RECENT_COMMITS_LIMIT above, which backs the unrelated /status
+// summary -- these two commands are allowed to default differently.
+export const DEFAULT_HISTORY_LIMIT = 10;
+export const MAX_HISTORY_LIMIT = 50;
+
 // Fields are joined with \x1f (unit separator) and each record terminated with \x1e
 // (record separator) so commit subjects containing spaces/punctuation can never be
 // mistaken for a field boundary — see GitLogParser.ts.
 const RECENT_COMMITS_FORMAT = "%H\x1f%h\x1f%an\x1f%aI\x1f%s\x1e";
+
+// Git History & Inspection System: single-commit metadata format (git log -1
+// <hash>), used by /show and /diff's own header. Adds author email and
+// abbreviated parent hashes (%p) to RECENT_COMMITS_FORMAT's fields -- neither
+// is needed by the multi-commit list view above, so this stays a distinct
+// format rather than widening that one for every entry of a list. Always
+// exactly one record (git log -1), so no trailing \x1e is needed.
+const SHOW_COMMIT_FORMAT = "%H\x1f%h\x1f%an\x1f%ae\x1f%aI\x1f%p\x1f%s";
 
 export const GitCommand = {
   status: (): string[] => ["status", "--porcelain=v2", "--branch"],
@@ -125,4 +139,41 @@ export const GitCommand = {
   commitNoEdit: (): string[] => ["commit", "--no-edit"],
   countCommitsBetween: (from: string, to: string): string[] => ["rev-list", "--count", `${from}..${to}`],
   bisectReset: (): string[] => ["bisect", "reset"],
+
+  // Git History & Inspection System (/history branch:/author:/search:) --
+  // author/search are omitted entirely rather than passed as "" when unset,
+  // since git's own --author=""/--grep="" match every commit (an empty
+  // pattern), not none -- the opposite of "no filter" this command needs
+  // when the caller simply didn't ask for one.
+  filteredHistory: (limit: number, ref?: string, author?: string, search?: string): string[] => {
+    const args = ["log", "-n", String(limit), `--pretty=tformat:${RECENT_COMMITS_FORMAT}`];
+    if (author) args.push(`--author=${author}`);
+    if (search) args.push(`--grep=${search}`, "-i");
+    if (ref) args.push(ref);
+    return args;
+  },
+  // /show, /diff's own header -- see SHOW_COMMIT_FORMAT above.
+  showCommitMeta: (hash: string): string[] => ["log", "-1", `--pretty=tformat:${SHOW_COMMIT_FORMAT}`, hash],
+  // diff-tree (not `git show`) so a root commit (--root) is handled the same
+  // way as any other -- compared against the empty tree, every path reported
+  // "added" -- rather than diff-tree's own default of reporting nothing at
+  // all for a commit with no parent. -r recurses into subdirectories, same
+  // as diffNameStatus above; --no-renames for the same reason diffNameStatus
+  // has it (a rename must never silently hide as a single "R" record this
+  // codebase's status mapping doesn't understand).
+  nameStatusForCommit: (hash: string): string[] => [
+    "diff-tree",
+    "--no-commit-id",
+    "--no-renames",
+    "--name-status",
+    "-r",
+    "--root",
+    hash,
+  ],
+  // Same shape as nameStatusForCommit above, --numstat instead of
+  // --name-status -- per-file insertion/deletion counts for the same commit,
+  // parsed separately since numstat alone can't distinguish "added" from "a
+  // modified file with zero deletions" (see GitHistoryService's own doc
+  // comment on why both commands are needed).
+  numstatForCommit: (hash: string): string[] => ["diff-tree", "--no-commit-id", "--no-renames", "--numstat", "-r", "--root", hash],
 } as const;

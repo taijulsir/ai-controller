@@ -4,4 +4,5 @@ export * from "./interfaces";
 export * from "./types";
 export { GitAdapter } from "./GitAdapter";
 export { GitHealthService } from "./GitHealthService";
+export { GitHistoryService } from "./GitHistoryService";
 export { RepositorySnapshotService } from "./RepositorySnapshotService";

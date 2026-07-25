@@ -105,6 +105,7 @@ describe("SafeUndoFramework.executeUndoPlan", () => {
         strategy: "reset-soft",
         requiresApproval: false,
         recordedAt: new Date(),
+        afterRef: "after-sha",
       }),
     ).resolves.toBeUndefined();
   });

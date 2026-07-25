@@ -1,4 +1,17 @@
-import type { CommitSummary, GitFileChange, GitStatus, RepositoryHealthReport, SubmoduleStatus, WorktreeInfo } from "./types";
+import type {
+  CommitDetail,
+  CommitDiffStat,
+  CommitDiffStatResult,
+  CommitMetadata,
+  CommitSummary,
+  GitFileChange,
+  GitHistoryFilter,
+  GitHistoryResult,
+  GitStatus,
+  RepositoryHealthReport,
+  SubmoduleStatus,
+  WorktreeInfo,
+} from "./types";
 
 export interface IGitAdapter {
   status(): Promise<GitStatus>;
@@ -112,6 +125,16 @@ export interface IGitAdapter {
   // Path -> true when the conflicted blob is binary (see GitConstants'
   // conflictedFilesNumstat doc comment for the detection method).
   conflictedFilesAreBinary(): Promise<Map<string, boolean>>;
+
+  // Git History & Inspection System: read-only, mechanical primitives, no
+  // different in kind from getRecentCommits above -- GitAdapter still never
+  // decides what's "interesting" or translates a git failure into a
+  // friendly message (that's GitHistoryService's job, the same
+  // mechanism/policy split GitHealthService already established).
+  getCommitHistory(limit: number, ref?: string, author?: string, search?: string): Promise<CommitSummary[]>;
+  getCommitMetadata(hash: string): Promise<CommitMetadata>;
+  getCommitFileChanges(hash: string): Promise<GitFileChange[]>;
+  getCommitDiffStat(hash: string): Promise<CommitDiffStat[]>;
 }
 
 export interface IGitHealthService {
@@ -128,4 +151,16 @@ export interface IRepositorySnapshotService {
   capture(repositoryId: string): Promise<string>;
   diff(repositoryId: string, fromRef: string, toRef: string): Promise<GitFileChange[]>;
   restore(repositoryId: string, fromRef: string, filesToRestore: string[], filesToDelete: string[]): Promise<void>;
+}
+
+// Git History & Inspection System: the Foundation-layer composer for
+// /history, /show, /diff -- same role GitHealthService plays for /health,
+// composing GitAdapter's mechanical primitives into ready-to-format results
+// and translating a raw GitCommandError into a specific, friendly domain
+// error (CommitNotFoundError, BranchNotFoundError) instead of letting git's
+// own stderr reach the user.
+export interface IGitHistoryService {
+  getHistory(repositoryId: string, filter: GitHistoryFilter): Promise<GitHistoryResult>;
+  getCommitDetail(repositoryId: string, hash: string): Promise<CommitDetail>;
+  getCommitDiffStat(repositoryId: string, hash: string): Promise<CommitDiffStatResult>;
 }

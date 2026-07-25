@@ -142,3 +142,87 @@ export interface InterruptedOperationInfo {
   kind: InProgressOperationKind;
   journalEntryId: string | undefined;
 }
+
+// ---------------------------------------------------------------------------
+// Git History & Inspection System -- additive to CommitSummary above, never a
+// replacement. CommitSummary stays exactly as its existing consumer
+// (RepositoryIntelligenceService, via GitAdapter.getRecentCommits) already
+// reads it; the types below back the new /history, /show, /diff commands.
+// ---------------------------------------------------------------------------
+
+// Raw per-commit metadata for a single, specifically-addressed commit (git
+// log -1 <hash>) -- richer than CommitSummary (adds email + parents), kept
+// as its own type rather than widening CommitSummary itself, since no
+// existing CommitSummary consumer needs either field and parsing them for
+// every entry of a multi-commit list would be pure waste.
+export interface CommitMetadata {
+  sha: string;
+  shortSha: string;
+  authorName: string;
+  authorEmail: string;
+  authorDate: Date;
+  // Short hashes, root commits have zero.
+  parents: string[];
+  subject: string;
+}
+
+// One file's insertion/deletion counts within a single commit (git diff-tree
+// --numstat). "binary" mirrors conflictedFilesAreBinary()'s own numstat
+// sentinel check ("-"/"-" for both counts) -- true insertions/deletions are
+// meaningless for a binary file, so both counts are always 0 when this is set.
+export interface CommitDiffStat {
+  path: string;
+  insertions: number;
+  deletions: number;
+  binary: boolean;
+}
+
+export interface GitHistoryFilter {
+  limit?: number;
+  branch?: string;
+  author?: string;
+  search?: string;
+}
+
+// currentBranch/headSha/detachedHead ride along with the commit list itself
+// so a caller can mark "this is the branch tip" per commit without a second
+// round trip -- same "bundle what the caller needs to render, in one
+// result" shape RepositoryHealthReport already uses. repositoryId is the
+// resolved id (never undefined, even when the caller omitted one and it
+// fell back to the active repository) -- Telegram's inline "Show"/"Diff"/
+// "Undo" buttons encode it in their own callback_data so a later tap always
+// targets the repository /history was actually run against, regardless of
+// whatever is active by the time the button is pressed.
+export interface GitHistoryResult {
+  repositoryId: string;
+  commits: CommitSummary[];
+  currentBranch: string;
+  headSha: string;
+  detachedHead: boolean;
+}
+
+// Everything /show <hash> needs in one composed result: CommitMetadata plus
+// the per-file change list and aggregate stat totals, the same "Foundation
+// primitives composed into one report" role GitHealthService already plays
+// for RepositoryHealthReport.
+export interface CommitDetail extends CommitMetadata {
+  isHead: boolean;
+  // Set only when isHead is true and HEAD is not detached.
+  currentBranch: string | undefined;
+  files: GitFileChange[];
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}
+
+// /diff <hash>'s own result: the per-file breakdown plus the same aggregate
+// totals CommitDetail carries, computed from the exact same numstat data --
+// never a second, independently-derived set of totals.
+export interface CommitDiffStatResult {
+  sha: string;
+  shortSha: string;
+  files: CommitDiffStat[];
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+}

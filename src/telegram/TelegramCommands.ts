@@ -15,15 +15,17 @@ import type { BotCommand } from "./types";
 export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "help", description: "List available commands" },
   { command: "status", description: "Repository status snapshot" },
-  { command: "history", description: "Recent execution history" },
   { command: "insights", description: "Derived repository insights" },
   { command: "recommendations", description: "Current ranked recommendations" },
   { command: "session", description: "Claude session status" },
+  // Git History & Inspection System: "history" is no longer task/workflow
+  // execution history -- see "/task history" (a subcommand, not listed
+  // separately here) for that.
   { command: "task", description: "Currently running/awaiting-approval task" },
-  // Git Orchestration redesign: now reverses whichever is more recent -- a
-  // Claude-editing task or a git-native operation (sync/merge/rebase/
-  // commit/push/branch/discard) -- not implement/fix alone.
-  { command: "undo", description: "Reverse the last change" },
+  // Git History & Inspection System: a bare "/undo" now previews recent
+  // commits instead of acting -- reply with "/undo <hash>" or "/undo
+  // confirm" to actually undo.
+  { command: "undo", description: "Preview or confirm reversing the last change" },
   { command: "runtime", description: "Background runtime operations report" },
   { command: "artifact", description: "List, get, or search generated artifacts" },
   { command: "analyze", description: "Ask Claude to analyze the repository" },
@@ -47,4 +49,9 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "resume", description: "Resume an in-progress merge or rebase" },
   { command: "abort", description: "Abort the in-progress merge or rebase" },
   { command: "ship", description: "Commit, push, and open a pull request" },
+  // Git History & Inspection System: commit log, single-commit detail, and
+  // per-file diff stats -- reachable from Telegram with no SSH access.
+  { command: "history", description: "Browse, filter, or search commit history" },
+  { command: "show", description: "Inspect a single commit" },
+  { command: "diff", description: "Structured per-file diff summary for a commit" },
 ];

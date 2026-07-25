@@ -34,6 +34,7 @@ export class SafeUndoFramework implements ISafeUndoFramework {
       strategy: entry.rollbackStrategy,
       requiresApproval: entry.rollbackStrategy === "revert-and-force-push-with-lease",
       recordedAt: entry.completedAt ?? entry.startedAt,
+      afterRef: entry.afterRef,
     };
   }
 

@@ -58,7 +58,12 @@ export interface BotCommand {
 // already-complete snapshot with no per-query variation.
 export type ApplicationQuery =
   | { type: "status" }
-  | { type: "history"; limit?: number }
+  // Renamed from "history": reachable only via "/task history" now that
+  // "/history" means the Git History & Inspection System's own commit log
+  // (the "git-history" variant below) -- parsed by CommandParser's own
+  // buildTaskQuery(), the same "task" subcommand family "task-cancel" is
+  // part of.
+  | { type: "task-history"; limit?: number }
   | { type: "insights" }
   | { type: "session" }
   // Phase E (Claude Session Management): part of the "session" command
@@ -86,7 +91,18 @@ export type ApplicationQuery =
   // needs no special repo= handling of its own; /undo repo=x and
   // repo=x /undo already work via the shared position-0/1 REPO_TOKEN logic
   // every command already gets.
-  | { type: "undo" }
+  // Git History & Inspection System: target is undefined for a bare
+  // "/undo" (preview), the literal "confirm", or a commit hash/prefix --
+  // see ApplicationService.undoLastExecution()'s own doc comment.
+  | { type: "undo"; target?: string }
+  // Git History & Inspection System: /history [count | branch:<name> |
+  // author:<name> | search:<text>] -- exactly one of limit/branch/author/
+  // search is ever set per call (CommandParser.buildGitHistoryQuery()
+  // recognizes one filter per invocation, matching every example the
+  // feature was specified with), never combined.
+  | { type: "git-history"; limit?: number; branch?: string; author?: string; search?: string }
+  | { type: "git-show"; hash: string }
+  | { type: "git-diff"; hash: string }
   // Git Orchestration redesign: bare, top-level commands, same shape as
   // "undo" above -- none takes a subcommand or repo=-adjacent argument of
   // its own.
