@@ -203,7 +203,9 @@ list is larger than is useful to render directly.)*
   [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#undo-architecture) for the full two-phase flow. Now
   joined by `SafeUndoFramework`, the ref-based sibling that reverses a git-native operation via
   `journal`'s own audit trail instead — `ApplicationService.undoLastExecution()` compares both
-  plans' timestamps and acts on whichever is more recent.
+  plans' timestamps and acts on whichever is more recent for `/undo confirm`, or resolves an
+  explicit `/undo <hash>` against `SafeUndoFramework`'s plan alone, scoped to the latest Git
+  operation only (see [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#undo-architecture)).
 - **`decisions`** — `DecisionEngine.analyze()` combines a repository's snapshot and recent
   `ProjectMemoryEvent`s into 9 typed `Insight` kinds. See
   [SYSTEM_DESIGN.md](./SYSTEM_DESIGN.md#decisionengine--insight-catalogue) for the full table.

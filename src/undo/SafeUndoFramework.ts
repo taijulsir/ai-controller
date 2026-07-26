@@ -12,8 +12,20 @@ import type { GitUndoPlan } from "./types";
 // Operation Journal (not ExecutionCheckpoint) to reverse a specific
 // git-mutating operation. /undo's Telegram surface stays one command --
 // ApplicationService.undoLastExecution() builds a plan from both this
-// framework and the existing UndoService and acts on whichever is more
-// recent (GitUndoPlan.recordedAt vs. UndoPlan.capturedAt).
+// framework and the existing UndoService; for a bare "/undo confirm" it acts
+// on whichever plan is more recent (GitUndoPlan.recordedAt vs.
+// UndoPlan.capturedAt), and for an explicit "/undo <hash>" it resolves
+// against this framework's plan alone (see that method's own doc comment).
+//
+// Product decision: buildUndoPlan() below deliberately queries only the
+// single most recent completed journal entry (limit: 1) -- it is not a
+// partial implementation of a lookup-by-hash feature. "/undo <hash>" only
+// ever supports the latest undoable Git operation; undoing an older,
+// already-superseded journal entry is intentionally out of scope (see the
+// architecture review referenced from ApplicationService.undoLastExecution())
+// because the recorded rollback strategy for a non-latest entry can no
+// longer be applied safely -- reset-hard/reset-soft would silently discard
+// every commit made after it, not just undo that one entry.
 export class SafeUndoFramework implements ISafeUndoFramework {
   constructor(
     private readonly journal: IOperationJournal,
@@ -22,6 +34,9 @@ export class SafeUndoFramework implements ISafeUndoFramework {
     private readonly approvalGate: IApprovalGate,
   ) {}
 
+  // Deliberately the single most recent completed, non-read-only entry --
+  // never a search. See this class's own doc comment above for why that is
+  // a product decision, not a gap.
   async buildUndoPlan(repositoryId: string): Promise<GitUndoPlan | undefined> {
     const [entry] = await this.journal.query({ repositoryId, status: JournalEntryStatus.Completed, limit: 1 });
     if (!entry || entry.rollbackStrategy === "read-only") {

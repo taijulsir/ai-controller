@@ -389,11 +389,28 @@ The tree-content one below (`UndoService`) still reverses only a **file-editing*
 `implement-feature` and `fix-bug` (`UndoableTaskPolicy`). The Git Orchestration redesign added
 a ref-based sibling, `SafeUndoFramework`, that reverses the last **git-native** operation
 instead (`/sync`, `/merge`, `/rebase`, `/commit`, `/push`, `/branch`, `/discard`) — see
-[Git-native undo](#git-native-undo-safeundoframework) below. Both plans are built in parallel;
-`ApplicationService` compares `UndoPlan.capturedAt` against `GitUndoPlan.recordedAt` and acts on
-whichever is more recent, with one hard override: `UndoService.buildUndoPlan()` reporting
+[Git-native undo](#git-native-undo-safeundoframework) below. Both plans are built in parallel; for
+a bare `/undo` (preview, nothing built) or `/undo confirm` (no hash named), `ApplicationService`
+compares `UndoPlan.capturedAt` against `GitUndoPlan.recordedAt` and acts on whichever is more
+recent, with one hard override: `UndoService.buildUndoPlan()` reporting
 `"execution-in-progress"` (a Claude-editing task is actively running right now) always wins,
 regardless of either timestamp.
+
+**`/undo <hash>` — explicit-hash authority, latest-only by product decision.** A hash the user
+names is resolved against `SafeUndoFramework`'s `GitUndoPlan` *only* — never against the
+timestamp race above, and never against the task-snapshot plan, no matter how recent that
+checkpoint is (post-incident fix: a real production `/undo <hash>` was previously answered with
+an unrelated task-snapshot message because the timestamp race ran *before* the hash was ever
+inspected). This is deliberately scoped to the single most recent Git journal entry —
+`SafeUndoFramework.buildUndoPlan()` never searches the journal by hash; see
+[Git-native undo](#git-native-undo-safeundoframework) below. A hash matching that entry's
+`afterRef` (by prefix) undoes it; a hash naming anything older, or given when no Git operation is
+undoable at all, is refused with a specific reason (`target-mismatch-git` /
+`target-not-found-git`) rather than silently falling back to the task candidate or searching
+further back in history. Undoing a historical (non-latest) Git operation is intentionally out of
+scope — the recorded rollback strategy for an older entry (typically `reset-hard`/`reset-soft`)
+cannot be replayed safely once later operations exist on top of it, since that would discard those
+later commits as collateral damage rather than undo only the one named.
 
 **Checkpointing.** `TaskPlanner` captures a git tree snapshot (`GitAdapter.createSnapshot()`,
 via `UndoCheckpointRecorder`) both immediately before and immediately after every undoable
@@ -427,7 +444,9 @@ the Telegram layer — only the three named non-error outcomes above (`nothing-t
 Reads the Operation Journal (`journal`) rather than an `ExecutionCheckpoint` — same two-phase
 split as `IUndoService` above, for the same reasons.
 
-1. `buildUndoPlan()` — finds the most recent `Completed` journal entry for the repository. An
+1. `buildUndoPlan()` — finds the most recent `Completed` journal entry for the repository, and
+   only that one entry: it queries the journal with `limit: 1`, never a search by ref/hash. This
+   is a product decision, not a partial feature — see `/undo <hash>`'s own scoping note above. An
    entry recorded with `rollbackStrategy: "read-only"` (fetch) means nothing to reverse
    (`undefined`). Otherwise the plan's `strategy` is the entry's own persisted
    `rollbackStrategy`, read straight off the entry — never re-derived from its operation type

@@ -190,6 +190,16 @@ describe("ResponseFormatter: Git History & Inspection System", () => {
       expect(formatter.formatUndoResult({ kind: "preview", commits: [] })).toMatch(/nothing to undo/i);
     });
 
+    // Post-incident fix: an explicit hash resolves against the Git journal
+    // only -- when nothing matches at all (not even a mismatch, no Git
+    // operation exists to compare against), the message must say so plainly
+    // rather than mention a task snapshot the user never asked about.
+    it("tells the user no Git operation matches an explicit hash when none exists", () => {
+      const text = formatter.formatUndoResult({ kind: "target-not-found-git", givenTarget: "2c0f01b5d" });
+      expect(text).toContain("2c0f01b5d");
+      expect(text).toMatch(/no undoable git operation/i);
+    });
+
     it("tells the user the expected hash on a git target mismatch", () => {
       const text = formatter.formatUndoResult({
         kind: "target-mismatch-git",

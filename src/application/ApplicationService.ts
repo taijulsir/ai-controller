@@ -404,22 +404,52 @@ export class ApplicationService implements IApplicationService {
   // here, so /undo behaves identically to /status, /branch, /recommendations,
   // and /task.
   //
-  // Git Orchestration redesign: /undo's single command surface now spans
-  // two independent undo mechanisms -- the tree-content one above
+  // Git Orchestration redesign: /undo's single command surface spans two
+  // independent undo mechanisms -- the tree-content one above
   // (Claude-editing tasks) and Safe Undo Framework's ref-based one
   // (git-native operations: sync/merge/rebase/commit/push/branch/discard).
-  // Both plans are built in parallel and compared by timestamp
-  // (UndoPlan.capturedAt vs. GitUndoPlan.recordedAt); whichever is more
-  // recent is the one actually undone. A real, in-progress Claude execution
-  // still takes priority over any comparison -- UndoService.buildUndoPlan()
-  // already reports "execution-in-progress" before either timestamp can be
-  // compared.
+  // A real, in-progress Claude execution takes priority over either
+  // mechanism -- UndoService.buildUndoPlan() already reports
+  // "execution-in-progress" before target is even inspected.
+  //
   // Git History & Inspection System: target undefined is a preview -- recent
   // commits only, nothing built or executed, so "/undo" alone can never act.
-  // A real target (a commit hash, or the literal "confirm") builds both
-  // plans exactly as before and validates target against whichever plan
-  // wins, only then executing -- see UndoOutcome's own doc comments for
-  // what each mismatch outcome means.
+  //
+  // Post-incident fix (explicit-hash authority): an explicit hash
+  // (target !== "confirm") is the user naming a specific commit -- it is
+  // resolved against Safe Undo Framework's own GitUndoPlan *only*, never
+  // against timestamp-based candidate selection and never against the
+  // task-snapshot plan, no matter how recent that task checkpoint is. Prior
+  // behavior compared UndoPlan.capturedAt/GitUndoPlan.recordedAt *first* and
+  // only then checked target against whichever plan that race picked --
+  // which silently discarded a perfectly valid, explicitly-given hash
+  // whenever a newer task checkpoint happened to win the race (the checkpoint
+  // has no commit hash of its own to validate the target against, so the
+  // hash was never even looked at). A hash the user typed is a stronger
+  // signal of intent than either timestamp, so it now short-circuits that
+  // race entirely.
+  //
+  // Product decision, scoped deliberately: "/undo <hash>" supports ONLY the
+  // latest undoable Git operation -- the one GitUndoPlan SafeUndoFramework's
+  // own buildUndoPlan() ever builds (it queries the journal for a single
+  // most-recent entry, never a search by hash/ref; see that method's own
+  // doc comment). The supplied hash is validated as a prefix match against
+  // that one candidate's afterRef; it is never used to look up an older,
+  // already-superseded journal entry. Undoing a non-latest historical
+  // operation is intentionally out of scope: the recorded rollback strategy
+  // for an older entry (typically reset-hard/reset-soft) cannot be replayed
+  // safely once later operations exist on top of it -- doing so would
+  // silently discard those later commits as collateral damage, not just
+  // undo the one the user named. If the hash doesn't match the latest
+  // candidate (whether because it names an older commit or because no Git
+  // operation is undoable at all), that is reported plainly
+  // ("target-mismatch-git" / "target-not-found-git") -- never a silent
+  // fallback to the task candidate, and never an attempt to search further
+  // back in history.
+  //
+  // Only a bare "/undo" (target undefined, handled above) or "/undo confirm"
+  // -- no hash named -- falls back to the original timestamp-based
+  // selection between the two mechanisms, unchanged.
   async undoLastExecution(repositoryId?: string, target?: string): Promise<UndoOutcome> {
     const resolvedId = this.resolveRepositoryId(repositoryId);
 
@@ -437,20 +467,34 @@ export class ApplicationService implements IApplicationService {
       return { kind: "execution-in-progress" };
     }
 
+    if (target !== "confirm") {
+      // Explicit hash: authoritative, latest-operation-only by design (see
+      // this method's own doc comment). Resolved against the single Git
+      // candidate SafeUndoFramework returns -- taskPlan is never consulted
+      // here, regardless of its capturedAt, and no older journal entry is
+      // ever searched for.
+      if (gitPlan === undefined) {
+        return { kind: "target-not-found-git", givenTarget: target };
+      }
+      // afterRef is a branch name, not a commit, for these two strategies
+      // (see GitUndoPlan.afterRef's own doc comment) -- there is nothing to
+      // match a hash against, so this must never be presented as
+      // "commit <branch name>" the way target-mismatch-git would.
+      if (BRANCH_SHAPED_ROLLBACK_STRATEGIES.has(gitPlan.strategy)) {
+        return { kind: "target-requires-confirm-git", operation: gitPlan.operation };
+      }
+      if (!(gitPlan.afterRef?.startsWith(target) ?? false)) {
+        return { kind: "target-mismatch-git", expectedHash: gitPlan.afterRef ?? "unknown", operation: gitPlan.operation, givenTarget: target };
+      }
+      await this.safeUndoFramework.executeUndoPlan(gitPlan);
+      return { kind: "git-undone", operation: gitPlan.operation };
+    }
+
+    // target === "confirm": no hash was named -- fall back to
+    // timestamp-based selection between the two mechanisms, exactly as
+    // before the fix.
     const preferGit = gitPlan !== undefined && (taskPlan.capturedAt === undefined || gitPlan.recordedAt > taskPlan.capturedAt);
     if (preferGit && gitPlan) {
-      if (target !== "confirm") {
-        // afterRef is a branch name, not a commit, for these two strategies
-        // (see GitUndoPlan.afterRef's own doc comment) -- there is nothing
-        // to match a hash against, so this must never be presented as
-        // "commit <branch name>" the way target-mismatch-git would.
-        if (BRANCH_SHAPED_ROLLBACK_STRATEGIES.has(gitPlan.strategy)) {
-          return { kind: "target-requires-confirm-git", operation: gitPlan.operation };
-        }
-        if (!(gitPlan.afterRef?.startsWith(target) ?? false)) {
-          return { kind: "target-mismatch-git", expectedHash: gitPlan.afterRef ?? "unknown", operation: gitPlan.operation, givenTarget: target };
-        }
-      }
       await this.safeUndoFramework.executeUndoPlan(gitPlan);
       return { kind: "git-undone", operation: gitPlan.operation };
     }
@@ -461,9 +505,6 @@ export class ApplicationService implements IApplicationService {
       case "drift-detected":
         return { kind: "drift-detected", checkpointId: taskPlan.checkpointId!, taskType: taskPlan.taskType!, conflictingFiles: taskPlan.conflictingFiles };
       case "ready":
-        if (target !== "confirm") {
-          return { kind: "target-requires-confirm", taskType: taskPlan.taskType! };
-        }
         return this.undoService.executeUndoPlan(taskPlan);
     }
   }

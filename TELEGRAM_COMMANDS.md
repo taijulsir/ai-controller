@@ -325,17 +325,25 @@ individually below.
 - **Type**: Manual (a targeted write, never approval-gated).
 - **Example**: `/task cancel`
 
-### `/undo`
-- **What it does**: Reverses whichever is more recent for the repository — the last
-  `/implement`/`/fix` task's file changes, or the last git-native operation (`/sync`, `/merge`,
-  `/rebase`, `/commit`, `/push`, `/branch`, `/discard`). Refuses (with a specific reason) if
-  there's nothing undoable, if a task is currently in progress, or if drift is detected (for the
-  task-based path — something else touched the same files since). Undoing a `/push` is the one
-  case that always asks for approval first, since it already reached the shared remote: approving
-  produces a revert commit plus a force-push-with-lease, not a silent history rewrite.
+### `/undo`, `/undo confirm`, `/undo <hash>`
+- **What it does**: A bare `/undo` never acts — it previews the repository's recent commits and
+  asks you to reply with either `/undo confirm` or `/undo <hash>`. Both of those reverse whichever
+  is more recent for the repository — the last `/implement`/`/fix` task's file changes, or the
+  last git-native operation (`/sync`, `/merge`, `/rebase`, `/commit`, `/push`, `/branch`,
+  `/discard`). Refuses (with a specific reason) if there's nothing undoable, if a task is
+  currently in progress, or if drift is detected (for the task-based path — something else
+  touched the same files since). Undoing a `/push` is the one case that always asks for approval
+  first, since it already reached the shared remote: approving produces a revert commit plus a
+  force-push-with-lease, not a silent history rewrite.
+  - `/undo <hash>` is scoped, by design, to confirming and undoing **only the latest undoable Git
+    operation** — the hash must match (by prefix) the commit that operation actually produced.
+    It exists so you can name what you expect to be undoing rather than blindly typing `confirm`;
+    it is not a way to reach further back into history. A hash for an older, already-superseded
+    commit is refused the same way a wrong hash is — it does not search past the latest operation.
+    Undoing an arbitrary historical commit is intentionally out of scope for this command.
 - **When to use**: To roll back the last change to a repository, whatever kind it was.
 - **Type**: Manual (a targeted write); approval-gated only when undoing a `/push`.
-- **Example**: `/undo`
+- **Example**: `/undo`, `/undo confirm`, `/undo 6739c2e`
 
 ### `/runtime` (or `/runtime report`)
 - **What it does**: Returns the full runtime operations report — combined status of the

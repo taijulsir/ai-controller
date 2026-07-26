@@ -377,6 +377,18 @@ export class ResponseFormatter implements IResponseFormatter {
           "",
           `Reply with /undo ${this.escapeHtml(this.shortRef(outcome.expectedHash))} or /undo confirm.`,
         ]);
+      // Post-incident fix: "/undo <hash>" where no undoable Git operation
+      // exists at all -- an explicit hash is resolved against the single
+      // latest Git journal entry only (product decision: historical/older
+      // hash lookup is out of scope, see ApplicationService.undoLastExecution()'s
+      // own doc comment), so this is reported plainly rather than silently
+      // falling back to a task-snapshot candidate the user never asked for.
+      case "target-not-found-git":
+        return this.template("⚠️", "Cannot Undo", [
+          `No undoable Git operation matches ${this.code(outcome.givenTarget)}.`,
+          "",
+          "Send /undo (no arguments) to see recent commits, or /undo confirm to undo the most recent change.",
+        ]);
       // "/undo <hash>" where the candidate is a Claude-editing task snapshot
       // -- no commit hash exists to match against.
       case "target-requires-confirm":

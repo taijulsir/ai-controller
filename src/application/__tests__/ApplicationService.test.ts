@@ -249,7 +249,15 @@ describe("ApplicationService.undoLastExecution", () => {
     expect(gitExecuted.called).toBe(true);
   });
 
-  it("refuses a hash-shaped target when the winning candidate is a task snapshot with no commit hash", async () => {
+  // Post-incident regression: a real production /undo <hash> was silently
+  // answered with a task-snapshot message instead of acting on (or
+  // rejecting) the named commit, because candidate selection used to run a
+  // timestamp race *before* ever looking at the target. An explicit hash is
+  // now resolved against the Git journal only, never against the
+  // task-snapshot plan -- when no Git operation exists at all to match it,
+  // that must be reported plainly, never silently swapped for whatever the
+  // task plan happens to be, ready or not.
+  it("reports a clear 'no matching Git operation' error -- not the task snapshot -- when an explicit hash has nothing to resolve against", async () => {
     const taskExecuted = { called: false };
     const service = buildApplicationService({
       repositoryRegistry: fakeRegistry(),
@@ -260,7 +268,37 @@ describe("ApplicationService.undoLastExecution", () => {
 
     const outcome = await service.undoLastExecution(undefined, "6739c2e");
 
-    expect(outcome).toEqual({ kind: "target-requires-confirm", taskType: "implement-feature" });
+    expect(outcome).toEqual({ kind: "target-not-found-git", givenTarget: "6739c2e" });
+    expect(taskExecuted.called).toBe(false);
+  });
+
+  // Post-incident regression: the exact scenario reported in production --
+  // a Claude task checkpoint captured *after* the commit the user actually
+  // wants to undo used to win the timestamp race and swallow the user's
+  // explicit hash entirely. The hash must now be authoritative: it resolves
+  // straight against the Git candidate and executes it, regardless of how
+  // much more recent the task checkpoint is.
+  it("lets an explicit hash override a newer task checkpoint and undoes the named Git operation", async () => {
+    const taskExecuted = { called: false };
+    const gitExecuted = { called: false };
+    const newerTaskPlan: UndoPlan = { ...readyTaskPlan(), capturedAt: new Date("2026-01-05T00:00:00Z") };
+    const olderGitPlan = gitPlan({ recordedAt: new Date("2026-01-02T00:00:00Z") });
+    const service = buildApplicationService({
+      repositoryRegistry: fakeRegistry(),
+      undoService: fakeUndoService(newerTaskPlan, taskExecuted),
+      safeUndoFramework: fakeSafeUndoFramework(olderGitPlan, gitExecuted),
+      gitHistoryService: fakeGitHistoryService(historyResult()),
+    });
+
+    // Sanity check on the fixture itself: the task checkpoint is genuinely
+    // newer than the git operation, so the old timestamp-race logic would
+    // have picked the task plan here.
+    expect(newerTaskPlan.capturedAt!.getTime()).toBeGreaterThan(olderGitPlan.recordedAt.getTime());
+
+    const outcome = await service.undoLastExecution(undefined, "6739c2e");
+
+    expect(outcome).toEqual({ kind: "git-undone", operation: JournalOperationType.Commit });
+    expect(gitExecuted.called).toBe(true);
     expect(taskExecuted.called).toBe(false);
   });
 

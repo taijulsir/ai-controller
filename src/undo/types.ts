@@ -100,8 +100,26 @@ export type UndoOutcome =
   // "/undo <hash>" where <hash> doesn't match the commit Safe Undo
   // Framework's plan would actually undo (or match its prefix) --
   // expectedHash/operation describe what the real candidate is, so
-  // ResponseFormatter can tell the user exactly what to type instead.
+  // ResponseFormatter can tell the user exactly what to type instead. This
+  // is also the outcome for a hash that correctly names an *older*,
+  // already-superseded commit: "/undo <hash>" supports only the latest
+  // undoable Git operation by product decision (see
+  // ApplicationService.undoLastExecution()'s own doc comment) -- there is no
+  // journal search to fall back to, so an older hash is reported as a
+  // mismatch against the current (latest) candidate, not resolved against
+  // history.
   | { kind: "target-mismatch-git"; expectedHash: string; operation: JournalOperationType; givenTarget: string }
+  // "/undo <hash>" where no undoable Git operation exists at all (Safe Undo
+  // Framework's own buildUndoPlan() returned undefined -- no completed,
+  // non-read-only journal entry for this repository). An explicit hash is
+  // only ever resolved against the single latest Git journal entry (see
+  // ApplicationService.undoLastExecution()'s own doc comment) -- it is never
+  // matched against a task-snapshot checkpoint, even when one exists and is
+  // ready, so this is reported as-is rather than silently substituting that
+  // checkpoint. Never means "searched history and found nothing" -- there is
+  // no history search; it means no undoable Git operation is the latest one
+  // right now.
+  | { kind: "target-not-found-git"; givenTarget: string }
   // "/undo <hash>" where the actual candidate is a Claude-editing task
   // snapshot, which has no commit hash to match against at all -- the user
   // must reply with the literal "/undo confirm" instead.
