@@ -176,4 +176,67 @@ export const GitCommand = {
   // modified file with zero deletions" (see GitHistoryService's own doc
   // comment on why both commands are needed).
   numstatForCommit: (hash: string): string[] => ["diff-tree", "--no-commit-id", "--no-renames", "--numstat", "-r", "--root", hash],
+
+  // Working Tree Management (/changes, /showchanges, /discard <index>,
+  // /discard all) -- reuses status() verbatim (same command, a second,
+  // richer parse of the identical output -- see GitStatusParser.
+  // parseWorkingTreeChanges) for listing, and adds four small, purpose-built
+  // primitives for showing/discarding one file's change at a time. None of
+  // these is reset --hard: per-file discard is always expressed as restore
+  // (index+worktree back to HEAD) or clean (remove an untracked path), the
+  // two git subcommands built specifically for "make this path match a known
+  // good state" without moving HEAD, touching unrelated commits, or
+  // affecting any other path.
+  //
+  // /showchanges <index>'s own diff commands -- three variants (unstaged,
+  // staged, untracked) since a plain `git diff` needs to be told which
+  // baseline to compare the working tree against, and untracked files have
+  // no baseline in git at all. Deliberately WITHOUT --no-renames (unlike
+  // every machine-parsed diff command elsewhere in this file, e.g.
+  // diffNameStatus) -- this output is only ever shown to a human, never
+  // parsed, so git's own rename detection is left on: for a renamed file
+  // (both old and new path passed as pathspecs by GitAdapter.
+  // getWorkingTreeChangeDiff) that produces a real "rename from/rename to"
+  // diff with just the content delta, not a confusing whole-file
+  // delete+add pair.
+  diffWorkingTree: (paths: string[]): string[] => ["diff", "--", ...paths],
+  diffStaged: (paths: string[]): string[] => ["diff", "--cached", "--", ...paths],
+  // --no-index compares two real paths directly, bypassing the index
+  // entirely -- the only way to get a real, familiar-looking unified diff
+  // for a file git has no record of at all. Exits 1 whenever the two sides
+  // differ (always true here, since /dev/null is always "empty") -- a normal
+  // outcome, not a failure; see GitAdapter.getWorkingTreeChangeDiff's own
+  // handling, the same exit-code-1-is-not-an-error pattern isAncestor()
+  // already established for merge-base --is-ancestor.
+  diffUntrackedAgainstEmpty: (path: string): string[] => ["diff", "--no-renames", "--no-index", "--", "/dev/null", path],
+  // /discard's own restore/unstage/remove primitives -- deliberately three
+  // narrow commands, not one, so WorkingTreeService (which decides which
+  // applies per file, based on that file's own status) never has to build a
+  // single command flexible enough to cover every case at once, the same
+  // "GitAdapter stays mechanism, the caller stays judgment" split every
+  // other primitive in this file already follows.
+  //
+  // --source=HEAD --staged --worktree together reset *both* the index and
+  // the working tree copy of each path back to HEAD in one atomic command --
+  // correct for modified/deleted paths and for a rename's own old path
+  // (which always exists in HEAD), regardless of whether the path is
+  // currently staged, unstaged, or both; --staged is a safe no-op when
+  // nothing is actually staged for that path.
+  restoreFromHead: (paths: string[]): string[] => ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...paths],
+  // For a path that does NOT exist in HEAD (a staged-added file, or a
+  // rename's own new path) -- restore --staged with no --source defaults to
+  // unstaging against HEAD, which git handles correctly even when the path
+  // itself has no HEAD counterpart (the whole point of unstaging a new file
+  // is to make it not-staged, not to restore content that was never there).
+  unstagePaths: (paths: string[]): string[] => ["restore", "--staged", "--", ...paths],
+  // -fd (not -fdx/-fdX): only ever removes genuinely untracked, non-ignored
+  // paths -- git clean's own default behavior already guarantees an ignored
+  // file is never touched, so no separate check is needed here to satisfy
+  // "never delete ignored files unexpectedly". -d so an entirely untracked
+  // directory (reported as one line by `git status`) is removed as a whole,
+  // not left as an empty shell. Always path-scoped (`--` + explicit paths),
+  // never the bare whole-tree `cleanForce()` above -- the one thing that
+  // makes single-file discard safe to distinguish from /discard's own
+  // intentionally-whole-tree cleanForce() call.
+  removeUntrackedPaths: (paths: string[]): string[] => ["clean", "-fd", "--", ...paths],
 } as const;

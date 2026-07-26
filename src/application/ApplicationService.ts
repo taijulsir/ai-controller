@@ -20,14 +20,18 @@ import type { RuntimeDiagnosticsReport } from "../diagnostics/types";
 import type { IExecutionStateReader } from "../executionstate/interfaces";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import { GitAdapter } from "../git/GitAdapter";
-import type { IGitHealthService, IGitHistoryService } from "../git/interfaces";
+import type { IGitHealthService, IGitHistoryService, IWorkingTreeService } from "../git/interfaces";
 import type {
   CommitDetail,
   CommitDiffStatResult,
+  DiscardOutcome,
+  DiscardPlan,
   GitHistoryFilter,
   GitHistoryResult,
   InProgressOperationKind,
   RepositoryHealthReport,
+  WorkingTreeChangeDiff,
+  WorkingTreeChangesResult,
 } from "../git/types";
 import type { IConflictResolutionEngine } from "../gitengines/interfaces";
 import { ConflictResolutionMode } from "../gitengines/types";
@@ -230,6 +234,12 @@ export class ApplicationService implements IApplicationService {
     // undoLastExecution()'s bare-"/undo" preview reuses it too, rather than
     // a third, independent way of listing recent commits.
     private readonly gitHistoryService: IGitHistoryService,
+    // Working Tree Management: same Foundation-layer role as
+    // gitHistoryService above -- getWorkingTreeChanges/getWorkingTreeChangeDiff
+    // are direct pass-throughs, discardWorkingTreeChange/
+    // discardAllWorkingTreeChanges compose its two-phase build/execute plan
+    // exactly the way undoLastExecution() composes IUndoService's.
+    private readonly workingTreeService: IWorkingTreeService,
     // Artifact Management: the same single ArtifactService/maintenance pair
     // src/index.ts constructs via createArtifactModule() for TaskArtifactRecorder
     // -- this class never constructs or rebuilds its own, it only exposes
@@ -576,6 +586,48 @@ export class ApplicationService implements IApplicationService {
         break;
     }
     return { kind: "aborted", operation };
+  }
+
+  // Working Tree Management: /changes -- a direct pass-through to Working
+  // Tree Service, no synthesis of its own, the same shape
+  // getRepositoryHealth() above has for Git Health Service.
+  async getWorkingTreeChanges(repositoryId?: string): Promise<WorkingTreeChangesResult> {
+    return this.workingTreeService.getChanges(this.resolveRepositoryId(repositoryId));
+  }
+
+  // /showchanges <index> -- another direct pass-through; WorkingTreeChangeNotFoundError
+  // propagates unchanged, same as CommitNotFoundError already does for /show
+  // and /diff (TelegramAdapter's generic catch renders it via
+  // formatUnexpectedError, no special case needed here or there).
+  async getWorkingTreeChangeDiff(repositoryId: string | undefined, index: number): Promise<WorkingTreeChangeDiff> {
+    return this.workingTreeService.getChangeDiff(this.resolveRepositoryId(repositoryId), index);
+  }
+
+  // /discard <index> [confirm] -- composes WorkingTreeService's two phases
+  // exactly the way undoLastExecution() composes IUndoService's: build the
+  // plan, then either report it (unconfirmed, or not "ready") or execute it.
+  // Never calls executeDiscardPlan() unless both confirmed and status ===
+  // "ready", so a bare "/discard <index>" can never discard anything --
+  // same guarantee deleteAllArtifacts() already documents for its own
+  // confirmed parameter.
+  async discardWorkingTreeChange(repositoryId: string | undefined, index: number, confirmed: boolean): Promise<DiscardPlan | DiscardOutcome> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const plan = await this.workingTreeService.buildDiscardPlan(resolvedId, { kind: "index", index });
+    if (!confirmed || plan.status !== "ready") {
+      return plan;
+    }
+    return this.workingTreeService.executeDiscardPlan(plan);
+  }
+
+  // /discard all [confirm] -- same shape as discardWorkingTreeChange above,
+  // target.kind: "all" instead of "index".
+  async discardAllWorkingTreeChanges(repositoryId: string | undefined, confirmed: boolean): Promise<DiscardPlan | DiscardOutcome> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const plan = await this.workingTreeService.buildDiscardPlan(resolvedId, { kind: "all" });
+    if (!confirmed || plan.status !== "ready") {
+      return plan;
+    }
+    return this.workingTreeService.executeDiscardPlan(plan);
   }
 
   // Fetches the snapshot and analyzes it exactly once, then hands both —

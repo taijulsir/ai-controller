@@ -111,6 +111,91 @@ describe("CommandParser: Git History & Inspection System", () => {
     });
   });
 
+  describe("/changes", () => {
+    it("carries no arguments", () => {
+      const parsed = parser.parse("/changes");
+      expect(parsed).toEqual({ kind: "query", query: { type: "working-tree-changes" }, repositoryId: undefined });
+    });
+
+    it("honors a trailing repo= override", () => {
+      const parsed = parser.parse("/changes repo=test-ai-controller");
+      expect(parsed).toEqual({ kind: "query", query: { type: "working-tree-changes" }, repositoryId: "test-ai-controller" });
+    });
+  });
+
+  describe("/showchanges", () => {
+    it("parses a positive index", () => {
+      const parsed = parser.parse("/showchanges 3");
+      expect(parsed).toEqual({ kind: "query", query: { type: "working-tree-change-diff", index: 3 }, repositoryId: undefined });
+    });
+
+    it("requires an index", () => {
+      expect(() => parser.parse("/showchanges")).toThrow(CommandParseError);
+    });
+
+    it("rejects a non-numeric index", () => {
+      expect(() => parser.parse("/showchanges abc")).toThrow(CommandParseError);
+    });
+
+    it("rejects zero and negative indexes", () => {
+      expect(() => parser.parse("/showchanges 0")).toThrow(CommandParseError);
+      expect(() => parser.parse("/showchanges -1")).toThrow(CommandParseError);
+    });
+  });
+
+  // Working Tree Management: "/discard" is a command family whose kind
+  // depends on its own arguments -- bare stays the pre-existing task-kind
+  // whole-tree command, unchanged; everything else is the new query-kind
+  // family.
+  describe("/discard", () => {
+    it("bare /discard is unchanged -- still a task-kind, whole-tree command", () => {
+      const parsed = parser.parse("/discard");
+      expect(parsed).toEqual({ kind: "task", task: { type: "discard" }, repositoryId: undefined });
+    });
+
+    it("/discard <index> previews without confirming", () => {
+      const parsed = parser.parse("/discard 2");
+      expect(parsed).toEqual({ kind: "query", query: { type: "discard-change", index: 2, confirmed: false }, repositoryId: undefined });
+    });
+
+    it("/discard <index> confirm carries confirmed: true", () => {
+      const parsed = parser.parse("/discard 2 confirm");
+      expect(parsed).toEqual({ kind: "query", query: { type: "discard-change", index: 2, confirmed: true }, repositoryId: undefined });
+    });
+
+    it("/discard all previews without confirming", () => {
+      const parsed = parser.parse("/discard all");
+      expect(parsed).toEqual({ kind: "query", query: { type: "discard-all", confirmed: false }, repositoryId: undefined });
+    });
+
+    it("/discard all confirm carries confirmed: true", () => {
+      const parsed = parser.parse("/discard all confirm");
+      expect(parsed).toEqual({ kind: "query", query: { type: "discard-all", confirmed: true }, repositoryId: undefined });
+    });
+
+    it("is case-insensitive for 'all' and 'confirm'", () => {
+      expect(parser.parse("/discard ALL CONFIRM")).toEqual({ kind: "query", query: { type: "discard-all", confirmed: true }, repositoryId: undefined });
+    });
+
+    it("rejects a non-numeric, non-'all' target", () => {
+      expect(() => parser.parse("/discard foo")).toThrow(CommandParseError);
+    });
+
+    it("rejects zero and negative indexes", () => {
+      expect(() => parser.parse("/discard 0")).toThrow(CommandParseError);
+      expect(() => parser.parse("/discard -1")).toThrow(CommandParseError);
+    });
+
+    it("honors a trailing repo= override alongside index+confirm", () => {
+      const parsed = parser.parse("/discard 2 confirm repo=test-ai-controller");
+      expect(parsed).toEqual({
+        kind: "query",
+        query: { type: "discard-change", index: 2, confirmed: true },
+        repositoryId: "test-ai-controller",
+      });
+    });
+  });
+
   describe("/task history (renamed from the old bare /history)", () => {
     it("bare '/task history' carries no limit", () => {
       const parsed = parser.parse("/task history");

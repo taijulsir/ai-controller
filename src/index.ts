@@ -15,7 +15,7 @@ import { DecisionEngine } from "./decisions";
 import { RuntimeDiagnosticsEngine } from "./diagnostics";
 import { DeferredExecutionStateReader, ExecutionStateTracker } from "./executionstate";
 import { ConflictResolutionEngine, IntelligentSyncEngine, MergeEngine, RebaseEngine } from "./gitengines";
-import { GitHealthService, GitHistoryService, RepositorySnapshotService } from "./git";
+import { GitHealthService, GitHistoryService, RepositorySnapshotService, WorkingTreeService } from "./git";
 import { AutomaticSafetyPolicies, CommandOrchestrator, DeferredApprovalGate, PreflightValidationPolicy } from "./gitorchestration";
 import { GitStateMachine, RepositoryStateAnalyzer } from "./gitstate";
 import { GitTransactionManager } from "./gittransaction";
@@ -335,6 +335,12 @@ async function bootstrap(): Promise<void> {
     deferredApprovalGate,
   );
   const safeUndoFramework = new SafeUndoFramework(operationJournal, repositoryRegistry, repositorySnapshotService, deferredApprovalGate);
+  // Working Tree Management: reuses the same gitTransactionManager instance
+  // workflowFactory is given below (so a discard performed through this
+  // service is journaled and /undo-able exactly like DiscardWorkflow's own
+  // bare /discard), and the same deferredExecutionStateReader/gitHealthService
+  // every other safety-checked query already shares.
+  const workingTreeService = new WorkingTreeService(repositoryRegistry, gitTransactionManager, deferredExecutionStateReader, gitHealthService);
 
   const applicationService = new ApplicationService(
     repositoryIntelligence,
@@ -367,6 +373,7 @@ async function bootstrap(): Promise<void> {
     conflictResolutionEngine,
     safeUndoFramework,
     gitHistoryService,
+    workingTreeService,
     artifactModule.service,
     artifactModule.maintenance,
   );

@@ -77,10 +77,6 @@ export class CommandParser implements ICommandParser {
     // request -- RebaseWorkflow itself resolves the branch's own configured
     // upstream when "onto" is omitted (see RebaseTask's own doc comment).
     rebase: (args) => ({ type: "rebase", input: args ? { onto: args } : undefined }),
-    // No pathspec form -- "/discard" always discards every uncommitted
-    // change (staged, unstaged, untracked) in one shot, matching
-    // DiscardWorkflow's own single-shot design.
-    discard: () => ({ type: "discard" }),
   };
 
   parse(text: string): ParsedCommand {
@@ -259,6 +255,64 @@ export class CommandParser implements ICommandParser {
       const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
       const target = text.trim().split(/\s+/)[0];
       return { kind: "query", query: target ? { type: "undo", target } : { type: "undo" }, repositoryId: resolvedRepositoryId };
+    }
+
+    // Working Tree Management: "/changes" lists every local working-tree
+    // change with a stable index each file keeps for the lifetime of that
+    // one listing -- no arguments of its own beyond the shared repo=
+    // handling every bare, top-level command already gets.
+    if (normalizedCommand === "changes") {
+      const { repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      return { kind: "query", query: { type: "working-tree-changes" }, repositoryId: resolvedRepositoryId };
+    }
+
+    // "/showchanges <index>" -- index refers to /changes' own numbering,
+    // never a commit hash (that's /diff <hash>'s job) -- rejecting anything
+    // that isn't a positive integer here, the same "git itself is not the
+    // authority, this is our own concept" precedent WorkingTreeChangeNotFoundError
+    // documents for the not-found case.
+    if (normalizedCommand === "showchanges") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      const index = this.tryParsePositiveIndex(text.trim().split(/\s+/)[0]);
+      if (index === undefined) {
+        throw new CommandParseError('"showchanges" requires a positive index from /changes, e.g. "showchanges 2".');
+      }
+      return { kind: "query", query: { type: "working-tree-change-diff", index }, repositoryId: resolvedRepositoryId };
+    }
+
+    // "/discard" is a command family whose kind depends on its own
+    // arguments, the same split "branch" already uses for itself: a bare
+    // "/discard" (no args) stays exactly what it always was -- a task-kind
+    // command, unconfirmed, whole-tree, routed through DiscardWorkflow.
+    // "/discard <index>", "/discard <index> confirm", "/discard all", and
+    // "/discard all confirm" are the new Working Tree Management family
+    // instead -- query-kind, always requiring the literal "confirm" token
+    // (re-supplied alongside its own target, never a bare "/discard confirm"
+    // on its own, since there is no session state anywhere in this codebase
+    // to remember *which* target an earlier, separate "/discard <index>"
+    // request was about -- see ApplicationService.discardWorkingTreeChange's
+    // own doc comment) before anything is actually discarded.
+    if (normalizedCommand === "discard") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      const discardTokens = text.trim().split(/\s+/).filter((token) => token.length > 0);
+      if (discardTokens.length === 0) {
+        return { kind: "task", task: { type: "discard" }, repositoryId: resolvedRepositoryId };
+      }
+
+      const confirmed = discardTokens[discardTokens.length - 1].toLowerCase() === "confirm";
+      const targetTokens = confirmed ? discardTokens.slice(0, -1) : discardTokens;
+
+      if (targetTokens.length === 1 && targetTokens[0].toLowerCase() === "all") {
+        return { kind: "query", query: { type: "discard-all", confirmed }, repositoryId: resolvedRepositoryId };
+      }
+      const index = targetTokens.length === 1 ? this.tryParsePositiveIndex(targetTokens[0]) : undefined;
+      if (index !== undefined) {
+        return { kind: "query", query: { type: "discard-change", index, confirmed }, repositoryId: resolvedRepositoryId };
+      }
+      throw new CommandParseError(
+        '"discard" takes an index from /changes (e.g. "discard 2", then "discard 2 confirm"), ' +
+          '"all" (e.g. "discard all", then "discard all confirm"), or no argument to discard everything immediately.',
+      );
     }
 
     if (normalizedCommand && QUERY_COMMANDS.has(normalizedCommand)) {
@@ -444,6 +498,20 @@ export class CommandParser implements ICommandParser {
   // /help, since none of the three previously told the user where to look.
   private unrecognized(label: string, name: string): CommandParseError {
     return new CommandParseError(`Sorry, I don't recognize the ${label} "${name}". Send /help to see available commands.`);
+  }
+
+  // Working Tree Management: shared by "/showchanges <index>" and
+  // "/discard <index>"'s own index parsing -- a positive integer only
+  // (indexes from /changes start at 1), undefined for anything else
+  // (including "0", a negative number, or non-numeric text) so each call
+  // site can throw its own, differently-worded CommandParseError rather than
+  // this one throwing a message that fits neither.
+  private tryParsePositiveIndex(token: string | undefined): number | undefined {
+    if (!token || !/^\d+$/.test(token)) {
+      return undefined;
+    }
+    const index = Number.parseInt(token, 10);
+    return index > 0 ? index : undefined;
   }
 
   // Git History & Inspection System: shared by history/show/diff/undo's own

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Repository } from "../../domain/repository/Repository";
-import type { GitHistoryFilter, GitHistoryResult } from "../../git/types";
-import type { IGitHistoryService } from "../../git/interfaces";
+import type { DiscardOutcome, DiscardPlan, GitHistoryFilter, GitHistoryResult } from "../../git/types";
+import type { IGitHistoryService, IWorkingTreeService } from "../../git/interfaces";
 import { JournalOperationType } from "../../journal/types";
 import type { IRepositoryRegistry } from "../../repositories/interfaces";
 import type { ISafeUndoFramework, IUndoService } from "../../undo/interfaces";
@@ -16,9 +16,10 @@ import { ApplicationService } from "../ApplicationService";
 // TypeError, not silently.
 function buildApplicationService(deps: {
   repositoryRegistry: IRepositoryRegistry;
-  undoService: IUndoService;
-  safeUndoFramework: ISafeUndoFramework;
-  gitHistoryService: IGitHistoryService;
+  undoService?: IUndoService;
+  safeUndoFramework?: ISafeUndoFramework;
+  gitHistoryService?: IGitHistoryService;
+  workingTreeService?: IWorkingTreeService;
 }): ApplicationService {
   const unused = undefined as never;
   return new ApplicationService(
@@ -45,13 +46,14 @@ function buildApplicationService(deps: {
     unused,
     unused,
     unused,
-    deps.undoService,
+    deps.undoService ?? unused,
     unused,
     unused,
     unused,
     unused,
-    deps.safeUndoFramework,
-    deps.gitHistoryService,
+    deps.safeUndoFramework ?? unused,
+    deps.gitHistoryService ?? unused,
+    deps.workingTreeService ?? unused,
     unused,
     unused,
   );
@@ -328,5 +330,108 @@ describe("ApplicationService.undoLastExecution", () => {
     const outcome = await service.undoLastExecution(undefined, "confirm");
 
     expect(outcome).toEqual({ kind: "execution-in-progress" });
+  });
+});
+
+function readyDiscardPlan(overrides: Partial<DiscardPlan> = {}): DiscardPlan {
+  return {
+    status: "ready",
+    repositoryId: "repo-1",
+    target: { kind: "index", index: 2 },
+    changes: [{ index: 2, path: "src/foo.ts", status: "modified", staged: false, unstaged: true }],
+    stagedCount: 0,
+    unstagedCount: 1,
+    untrackedCount: 0,
+    ...overrides,
+  };
+}
+
+function discardOutcome(overrides: Partial<DiscardOutcome> = {}): DiscardOutcome {
+  return {
+    kind: "discarded",
+    affectedFiles: ["src/foo.ts"],
+    stagedCount: 0,
+    unstagedCount: 0,
+    untrackedCount: 0,
+    isClean: true,
+    ...overrides,
+  };
+}
+
+function fakeWorkingTreeService(plan: DiscardPlan, outcome: DiscardOutcome, executed?: { called: boolean }): IWorkingTreeService {
+  return {
+    getChanges: async () => {
+      throw new Error("not needed");
+    },
+    getChangeDiff: async () => {
+      throw new Error("not needed");
+    },
+    buildDiscardPlan: async () => plan,
+    executeDiscardPlan: async () => {
+      if (executed) executed.called = true;
+      return outcome;
+    },
+  };
+}
+
+// Regression coverage for the confirmation flow shape Working Tree
+// Management's discardWorkingTreeChange()/discardAllWorkingTreeChanges()
+// must follow -- identical contract to deleteAllArtifacts()'s own confirmed
+// parameter: unconfirmed, or a plan that isn't "ready", must never reach
+// executeDiscardPlan().
+describe("ApplicationService discard confirmation flow", () => {
+  it("discardWorkingTreeChange returns the plan (never executes) when not confirmed", async () => {
+    const executed = { called: false };
+    const service = buildApplicationService({
+      repositoryRegistry: fakeRegistry(),
+      workingTreeService: fakeWorkingTreeService(readyDiscardPlan(), discardOutcome(), executed),
+    });
+
+    const result = await service.discardWorkingTreeChange(undefined, 2, false);
+
+    expect(result).toEqual(readyDiscardPlan());
+    expect(executed.called).toBe(false);
+  });
+
+  it("discardWorkingTreeChange executes and returns the outcome when confirmed and the plan is ready", async () => {
+    const executed = { called: false };
+    const service = buildApplicationService({
+      repositoryRegistry: fakeRegistry(),
+      workingTreeService: fakeWorkingTreeService(readyDiscardPlan(), discardOutcome(), executed),
+    });
+
+    const result = await service.discardWorkingTreeChange(undefined, 2, true);
+
+    expect(result).toEqual(discardOutcome());
+    expect(executed.called).toBe(true);
+  });
+
+  it("discardWorkingTreeChange never executes when confirmed but the plan isn't ready", async () => {
+    const executed = { called: false };
+    const notReady = readyDiscardPlan({ status: "operation-in-progress", changes: [], unstagedCount: 0 });
+    const service = buildApplicationService({
+      repositoryRegistry: fakeRegistry(),
+      workingTreeService: fakeWorkingTreeService(notReady, discardOutcome(), executed),
+    });
+
+    const result = await service.discardWorkingTreeChange(undefined, 2, true);
+
+    expect(result).toEqual(notReady);
+    expect(executed.called).toBe(false);
+  });
+
+  it("discardAllWorkingTreeChanges follows the same confirm-then-execute contract", async () => {
+    const executed = { called: false };
+    const allPlan = readyDiscardPlan({ target: { kind: "all" } });
+    const service = buildApplicationService({
+      repositoryRegistry: fakeRegistry(),
+      workingTreeService: fakeWorkingTreeService(allPlan, discardOutcome(), executed),
+    });
+
+    expect(await service.discardAllWorkingTreeChanges(undefined, false)).toEqual(allPlan);
+    expect(executed.called).toBe(false);
+
+    expect(await service.discardAllWorkingTreeChanges(undefined, true)).toEqual(discardOutcome());
+    expect(executed.called).toBe(true);
   });
 });

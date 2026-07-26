@@ -2,7 +2,19 @@ import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../
 import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
-import type { CommitDetail, CommitDiffStatResult, CommitSummary, GitFileChange, GitHistoryResult, RepositoryHealthReport } from "../git/types";
+import type {
+  CommitDetail,
+  CommitDiffStatResult,
+  CommitSummary,
+  DiscardOutcome,
+  DiscardPlan,
+  GitFileChange,
+  GitHistoryResult,
+  RepositoryHealthReport,
+  WorkingTreeChange,
+  WorkingTreeChangeDiff,
+  WorkingTreeChangesResult,
+} from "../git/types";
 import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { RecoveryOutcome } from "../recovery/types";
 import type { UndoOutcome } from "../undo/types";
@@ -18,6 +30,15 @@ import type { RecommendedAction } from "../strategy/types";
 import type { IResponseFormatter } from "./interfaces";
 import { MAX_HISTORY_KEYBOARD_ITEMS } from "./TelegramConstants";
 import { escapeHtml } from "./TelegramHtml";
+
+// Working Tree Management (/showchanges): a single file's diff can
+// legitimately run long (a generated lockfile, a large rewrite) -- capped
+// independently of TELEGRAM_MAX_MESSAGE_LENGTH's own chunking so one huge
+// diff never dominates the reply; the same "cap + say how much more" spirit
+// truncateBulletList already applies to lists, just line-based instead of
+// item-based since a diff's own line structure (hunks, +/- prefixes) has to
+// stay intact for it to remain readable.
+const MAX_DIFF_DISPLAY_LINES = 200;
 
 // Section titles as produced by RuntimeReportingEngine (Phase 8.9) — used
 // only to select which already-built sections to include per runtime query
@@ -108,6 +129,14 @@ const HELP_TEXT_LINES: readonly string[] = [
   "/health",
   "/resume",
   "/abort",
+  "",
+  "Working Tree Management",
+  "/changes",
+  "/showchanges &lt;index&gt;",
+  "/discard &lt;index&gt;",
+  "/discard &lt;index&gt; confirm",
+  "/discard all",
+  "/discard all confirm",
   "",
   "Git History & Inspection",
   "/history [count]",
@@ -599,6 +628,147 @@ export class ResponseFormatter implements IResponseFormatter {
       return "✅ Nothing to abort -- no merge, rebase, cherry-pick, revert, or bisect is currently in progress.";
     }
     return this.template("🛑", "Aborted", [this.field("Operation", this.code(outcome.operation))]);
+  }
+
+  // Working Tree Management: /changes -- grouped by status in a fixed order
+  // (Modified, Added, Deleted, Renamed, Untracked), each file numbered with
+  // its own change.index (assigned once, by WorkingTreeService, in the exact
+  // same order this method groups by -- see WorkingTreeChange's own doc
+  // comment) so the numbers shown here are always exactly what
+  // /showchanges/<index> and /discard <index> will resolve.
+  formatWorkingTreeChanges(result: WorkingTreeChangesResult): string {
+    if (result.changes.length === 0) {
+      return "✅ Clean working tree — no local changes.";
+    }
+
+    const lines: string[] = [];
+    this.pushWorkingTreeChangeSection(lines, "Modified", result.changes.filter((change) => change.status === "modified"));
+    this.pushWorkingTreeChangeSection(lines, "Added", result.changes.filter((change) => change.status === "added"));
+    this.pushWorkingTreeChangeSection(lines, "Deleted", result.changes.filter((change) => change.status === "deleted"));
+    this.pushWorkingTreeChangeSection(lines, "Renamed", result.changes.filter((change) => change.status === "renamed"));
+    this.pushWorkingTreeChangeSection(lines, "Untracked", result.changes.filter((change) => change.status === "untracked"));
+
+    lines.push(
+      "",
+      `Staged: ${result.stagedCount} · Unstaged: ${result.unstagedCount} · Untracked: ${result.untrackedCount}`,
+      "",
+      "Use /showchanges &lt;index&gt; to view a diff, /discard &lt;index&gt; to discard one file, or /discard all to discard everything.",
+    );
+
+    return this.template("📝", "Working Tree Changes", lines);
+  }
+
+  private pushWorkingTreeChangeSection(lines: string[], title: string, changes: WorkingTreeChange[]): void {
+    if (changes.length === 0) {
+      return;
+    }
+    if (lines.length > 0) {
+      lines.push("");
+    }
+    lines.push(`${title}:`);
+    for (const change of changes) {
+      const label = change.renamedFrom ? `${this.code(change.renamedFrom)} → ${this.code(change.path)}` : this.code(change.path);
+      lines.push(`${change.index}. ${label}`);
+    }
+  }
+
+  // /showchanges <index> -- the raw diff, monospaced (Telegram HTML <pre>),
+  // line-truncated (see MAX_DIFF_DISPLAY_LINES's own doc comment). Unlike
+  // formatCommitDiff (a structured +/- summary across possibly many files),
+  // this is always exactly one file, so the actual patch content is what's
+  // useful here, not a stat line.
+  formatWorkingTreeChangeDiff(result: WorkingTreeChangeDiff): string {
+    const { change, diff } = result;
+    const header = [
+      this.field("File", change.renamedFrom ? `${this.code(change.renamedFrom)} → ${this.code(change.path)}` : this.code(change.path)),
+      this.field("Status", this.humanizeWorkingTreeStatus(change.status)),
+    ];
+
+    const trimmed = diff.trim();
+    if (!trimmed) {
+      return this.template("🔍", "File Diff", [...header, "", "(no textual diff)"]);
+    }
+
+    const diffLines = trimmed.split("\n");
+    const shown = diffLines.slice(0, MAX_DIFF_DISPLAY_LINES);
+    const bodyLines = [...shown];
+    if (diffLines.length > MAX_DIFF_DISPLAY_LINES) {
+      bodyLines.push(`... and ${diffLines.length - MAX_DIFF_DISPLAY_LINES} more line(s)`);
+    }
+
+    return this.template("🔍", "File Diff", [...header, "", `<pre>${this.escapeHtml(bodyLines.join("\n"))}</pre>`]);
+  }
+
+  private humanizeWorkingTreeStatus(status: WorkingTreeChange["status"]): string {
+    switch (status) {
+      case "modified":
+        return "Modified";
+      case "added":
+        return "Added";
+      case "deleted":
+        return "Deleted";
+      case "renamed":
+        return "Renamed";
+      case "untracked":
+        return "Untracked";
+    }
+  }
+
+  // /discard <index> [confirm], /discard all [confirm] -- result is exactly
+  // what ApplicationService.discardWorkingTreeChange()/discardAllWorkingTreeChanges()
+  // returned: a DiscardOutcome (kind: "discarded") once actually executed, or
+  // a DiscardPlan (unconfirmed, or refused) otherwise -- every branch is laid
+  // out here, never decided here.
+  formatDiscardResult(result: DiscardPlan | DiscardOutcome): string {
+    // DiscardPlan and DiscardOutcome have no shared discriminant property
+    // (DiscardPlan carries "status", DiscardOutcome carries "kind") -- `in`
+    // narrows correctly here even though a plain `result.kind === ...` check
+    // would not (DiscardPlan has no "kind" property at all to compare
+    // against).
+    if ("kind" in result) {
+      return this.template("🗑️", "Discard Complete", [
+        `Affected Files (${result.affectedFiles.length}):`,
+        ...this.truncateBulletList(result.affectedFiles.map((file) => this.code(file))),
+        "",
+        result.isClean
+          ? "Working tree is now clean."
+          : `Staged: ${result.stagedCount} · Unstaged: ${result.unstagedCount} · Untracked: ${result.untrackedCount}`,
+      ]);
+    }
+
+    switch (result.status) {
+      case "nothing-to-discard":
+        return "✅ Nothing to discard — the working tree is already clean.";
+      case "execution-in-progress":
+        return this.template("⚠️", "Cannot Discard", ["A task is currently running for this repository."]);
+      case "operation-in-progress":
+        return this.template("⚠️", "Cannot Discard", [
+          "A merge, rebase, or other git operation is currently in progress. Resolve it first (see /health), or /resume, or /abort.",
+        ]);
+      case "ready": {
+        if (result.target.kind === "index") {
+          const [file] = result.changes;
+          return this.template("⚠️", "Discard Changes?", [
+            this.field("File", this.code(file.path)),
+            this.field("Status", this.humanizeWorkingTreeStatus(file.status)),
+            "",
+            `This cannot be undone through /discard itself, but is recoverable via ${this.code("/undo confirm")} immediately afterward.`,
+            "",
+            `Reply: ${this.code(`/discard ${result.target.index} confirm`)}`,
+          ]);
+        }
+        return this.template("⚠️", "Discard All Changes?", [
+          `This will discard all ${result.changes.length} local change(s):`,
+          ...this.truncateBulletList(result.changes.map((change) => this.code(change.path))),
+          "",
+          `Staged: ${result.stagedCount} · Unstaged: ${result.unstagedCount} · Untracked: ${result.untrackedCount}`,
+          "",
+          `This cannot be undone through /discard itself, but is recoverable via ${this.code("/undo confirm")} immediately afterward.`,
+          "",
+          `Reply: ${this.code("/discard all confirm")}`,
+        ]);
+      }
+    }
   }
 
   private shortId(id: string): string {

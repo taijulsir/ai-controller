@@ -325,6 +325,20 @@ export class TelegramAdapter implements ITelegramAdapter, ITelegramCallbackHandl
         return this.responseFormatter.formatResumeResult(await this.applicationService.resumeRepositoryOperation(repositoryId));
       case "abort":
         return this.responseFormatter.formatAbortResult(await this.applicationService.abortRepositoryOperation(repositoryId));
+      case "working-tree-changes":
+        return this.responseFormatter.formatWorkingTreeChanges(await this.applicationService.getWorkingTreeChanges(repositoryId));
+      case "working-tree-change-diff":
+        return this.responseFormatter.formatWorkingTreeChangeDiff(
+          await this.applicationService.getWorkingTreeChangeDiff(repositoryId, query.index),
+        );
+      case "discard-change":
+        return this.responseFormatter.formatDiscardResult(
+          await this.applicationService.discardWorkingTreeChange(repositoryId, query.index, query.confirmed),
+        );
+      case "discard-all":
+        return this.responseFormatter.formatDiscardResult(
+          await this.applicationService.discardAllWorkingTreeChanges(repositoryId, query.confirmed),
+        );
       case "runtime-report":
         return this.responseFormatter.formatRuntimeReport(this.applicationService.getRuntimeReport());
       case "runtime-status":

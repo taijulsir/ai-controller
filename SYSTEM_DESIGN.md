@@ -464,6 +464,90 @@ split as `IUndoService` above, for the same reasons.
    `.previousBranch`; `revert-and-force-push-with-lease` via `GitAdapter.revertCommit()` then
    `forcePushWithLease()`. Marks the entry `RolledBack` on success.
 
+## Working Tree Management architecture
+
+`/changes`, `/showchanges <index>`, `/discard <index>`, `/discard all`. A safe, per-file sibling to
+bare `/discard` (above) — not a replacement for it. Bare `/discard` stays exactly what it was:
+unconfirmed, whole-tree, `reset --hard`+`clean`, a task-kind command through `DiscardWorkflow`.
+This family is query-kind (parsed only when `/discard` carries arguments — the same
+"argument shape decides kind" split `/branch` already uses for itself), always
+confirmation-gated, and uses `git restore`/`git clean` exclusively — never `reset --hard` — so a
+single file can be targeted without affecting any other path.
+
+**Service ownership.** `WorkingTreeService` (`src/git/WorkingTreeService.ts`) is the
+Foundation-layer composer, the same role `GitHistoryService`/`GitHealthService` already play for
+`/history`/`/show`/`/diff` and `/health`: `GitAdapter` stays mechanism-only (new primitives below,
+each judgment-free), `WorkingTreeService` alone decides which primitive applies to a given file.
+Constructor dependencies are all pre-existing, already-shared instances — no new wiring beyond one
+more line in `src/index.ts`: `IRepositoryRegistry`, `IGitTransactionManager` (the exact same
+instance `WorkflowFactory` is given, so a discard through this service and a discard through
+`DiscardWorkflow` are journaled identically), `IExecutionStateReader`, `IGitHealthService`.
+
+**Listing (`getChanges`).** A second, richer parse of the exact same `git status --porcelain=v2`
+output `GitStatus`/`parseGitStatus()` already produce for every other consumer
+(`RepositoryIntelligenceService`, `DecisionEngine`, `GitHealthService`, ...) — additive
+(`parseWorkingTreeChanges()` in `GitStatusParser.ts`), never a change to that existing parse or its
+`GitStatus` shape. Each `WorkingTreeChange` carries a `status` (`modified`/`added`/`deleted`/
+`renamed`/`untracked`), independent `staged`/`unstaged` booleans (a file can be staged-modified
+*and* further modified since — both true), and a 1-based `index` assigned once, in the exact
+fixed grouping order (Modified, Added, Deleted, Renamed, Untracked) `ResponseFormatter` renders
+in — the only place an index is ever assigned; `/showchanges`/`/discard` always resolve their own
+`<index>` against a *freshly recomputed* list, never a cached one, so "index 3" always means
+whatever `/changes` would show as #3 right now (this is also how a discard can never target the
+wrong file even across two separate messages — see confirmation flow below).
+
+**Diffing (`getChangeDiff`).** Three new `GitAdapter` primitives, one per baseline a working-tree
+file can be diffed against: `diffWorkingTree` (unstaged vs. index), `diffStaged` (staged vs. HEAD),
+`diffUntrackedAgainstEmpty` (`git diff --no-index` against `/dev/null` — the only way to get a
+real unified diff for a path git has no record of at all; always exits 1, so its real output is
+read off `GitCommandError.stdout`, the same exit-code-1-is-not-an-error handling `isAncestor()`
+already established, extended to also carry stdout for this one caller). Unstaged takes priority
+over staged when both are true (the more current content); untracked has no baseline at all.
+
+**Discard — safety model.** `buildDiscardPlan()`/`executeDiscardPlan()` mirror `IUndoService`'s own
+two-phase `buildUndoPlan()`/`executeUndoPlan()` shape exactly. Phase 1 never mutates anything and
+refuses (via `DiscardPlanStatus`, not a thrown error) in the same two cases `UndoService`/
+`PreflightValidationPolicy` already guard against: a Claude task currently executing for the
+repository (`"execution-in-progress"`), or a merge/rebase/cherry-pick/revert/bisect in progress
+(`"operation-in-progress"`, via the same `GitHealthService` report `/health` renders — also the
+only time an unmerged/conflicted path can exist, so this one check covers that case too). An
+out-of-range index throws `WorkingTreeChangeNotFoundError` instead (the same "this is our own
+concept, not git's" role `CommitNotFoundError`/`BranchNotFoundError` already play for `/show`/
+`/history branch:`).
+
+Per-file dispatch, decided entirely in `WorkingTreeService` (never in `GitAdapter`):
+
+| Status | Mechanism |
+| --- | --- |
+| modified, deleted | `restoreFromHead` (`git restore --source=HEAD --staged --worktree`) |
+| added (always staged) | `unstagePaths` then `removeUntrackedPaths` |
+| untracked | `removeUntrackedPaths` (`git clean -fd`, respects `.gitignore` by construction) |
+| renamed | `restoreFromHead` on the old path; `unstagePaths`+`removeUntrackedPaths` on the new path if staged, else just `removeUntrackedPaths` |
+
+`removeUntrackedPaths` is always path-scoped (`clean -fd -- <paths>`), never the whole-tree
+`cleanForce()` bare `/discard` uses — the one thing that keeps single-file discard from ever
+touching an unrelated path. Phase 2 opens a `GitTransactionManager` transaction
+(`rollbackStrategy: "restore-tree"`, `operation: JournalOperationType.Discard` — the identical
+journal shape `DiscardWorkflow` already writes), runs the dispatch above, then commits — so a
+discard performed through this feature is `/undo`-able the same way bare `/discard` already is.
+`executeDiscardPlan()` throws `CannotExecuteDiscardPlanError` if called on a plan whose status
+isn't `"ready"` (a programmer-error guard, mirroring `CannotExecuteUndoPlanError` — never
+reachable from user input, since `ApplicationService` only calls it after checking status itself).
+
+**Confirmation flow.** Reuses the same stateless "literal confirm token" convention `/undo`/
+`/artifact delete-all` already established — deliberately *not* a new pending-approval mechanism
+(`IApprovalGate`/`TelegramApprovalProvider` is a different, heavier, inline-keyboard-based
+mechanism used for approval gates *inside* a single command's own execution, e.g. rebase or an
+already-pushed undo; it has no role here). Because `/discard <index>` needs to remember *which*
+index across a two-message round trip, and this codebase has no per-user pending-command session
+state anywhere, the confirmation reply repeats the same target: `/discard <index> confirm` /
+`/discard all confirm`, not a bare `/discard confirm` — `CommandParser` parses `confirmed` as a
+trailing literal `"confirm"` token (`ApplicationQuery`'s own `confirmed: boolean` field, same
+contract `artifact-delete-all`'s `confirmed` already documents: `ApplicationService` only ever
+calls `executeDiscardPlan()` when both `confirmed` is true *and* the freshly-rebuilt plan's status
+is `"ready"`). Confirmation prompts show the exact reply command with the real index substituted
+in, so it's directly copy-pasteable and never ambiguous about which file it means.
+
 ## Runtime operations surface
 
 `getRuntimeReport()` fetches `RuntimeStatus` once (a pure read-only composition of

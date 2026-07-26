@@ -10,10 +10,14 @@ import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type {
   CommitDetail,
   CommitDiffStatResult,
+  DiscardOutcome,
+  DiscardPlan,
   GitHistoryFilter,
   GitHistoryResult,
   InProgressOperationKind,
   RepositoryHealthReport,
+  WorkingTreeChangeDiff,
+  WorkingTreeChangesResult,
 } from "../git/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { ProjectMemoryEvent } from "../memory/types";
@@ -266,4 +270,25 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   // re-validation step -- the direct, fast "just get me out of this state"
   // escape hatch Recovery Planner's own multi-step plans are not.
   abortRepositoryOperation(repositoryId?: string): Promise<{ kind: "aborted"; operation: InProgressOperationKind } | { kind: "nothing-to-abort" }>;
+
+  // Working Tree Management: /changes -- a direct, read-only view of
+  // WorkingTreeService's own result, no synthesis of its own, same shape as
+  // getRepositoryHealth() above for Git Health Service.
+  getWorkingTreeChanges(repositoryId?: string): Promise<WorkingTreeChangesResult>;
+  // /showchanges <index> -- throws WorkingTreeChangeNotFoundError (via
+  // WorkingTreeService) when index doesn't resolve; TelegramAdapter lets it
+  // propagate to formatUnexpectedError the same way CommitNotFoundError
+  // already does for /show and /diff.
+  getWorkingTreeChangeDiff(repositoryId: string | undefined, index: number): Promise<WorkingTreeChangeDiff>;
+  // /discard <index> [confirm] -- composes WorkingTreeService's build/execute
+  // phases exactly the way undoLastExecution() composes IUndoService's:
+  // build the plan, then either report it (unconfirmed, or not "ready") or
+  // execute it. confirmed=false never discards anything, the same
+  // "CommandParser already required the literal confirm token before this
+  // method is even called with confirmed=true" guarantee deleteAllArtifacts
+  // already documents for itself.
+  discardWorkingTreeChange(repositoryId: string | undefined, index: number, confirmed: boolean): Promise<DiscardPlan | DiscardOutcome>;
+  // /discard all [confirm] -- same shape as discardWorkingTreeChange above,
+  // target.kind: "all" instead of "index".
+  discardAllWorkingTreeChanges(repositoryId: string | undefined, confirmed: boolean): Promise<DiscardPlan | DiscardOutcome>;
 }

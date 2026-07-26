@@ -110,6 +110,19 @@ export type ApplicationQuery =
   | { type: "recover" }
   | { type: "resume" }
   | { type: "abort" }
+  // Working Tree Management: /changes, /showchanges <index>, /discard
+  // <index> [confirm], /discard all [confirm] -- parsed by CommandParser's
+  // own dedicated blocks (same "argument shape decides kind" reasoning
+  // "branch"/"discard" already document for themselves). "confirmed" is
+  // false for a bare "/discard <index>"/"/discard all" -- CommandParser
+  // never discards anything itself either way, it only ever reports what the
+  // user typed; ApplicationService decides what an unconfirmed request does
+  // (report a plan and refuse, never discard), the same contract
+  // "artifact-delete-all"'s own confirmed field already documents.
+  | { type: "working-tree-changes" }
+  | { type: "working-tree-change-diff"; index: number }
+  | { type: "discard-change"; index: number; confirmed: boolean }
+  | { type: "discard-all"; confirmed: boolean }
   | { type: "runtime-report" }
   | { type: "runtime-status" }
   | { type: "runtime-diagnostics" }

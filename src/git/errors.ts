@@ -1,4 +1,4 @@
-function isExecFileError(value: unknown): value is { code?: number; stderr?: string } {
+function isExecFileError(value: unknown): value is { code?: number; stderr?: string; stdout?: string } {
   return typeof value === "object" && value !== null && "stderr" in value;
 }
 
@@ -11,6 +11,18 @@ export class GitCommandError extends Error {
   // the git binary itself couldn't be spawned).
   readonly exitCode?: number;
 
+  // Working Tree Management: `git diff --no-index` (GitAdapter.
+  // getWorkingTreeChangeDiff, the untracked-file case) always exits 1 when
+  // the two sides differ -- its real, useful diff output still arrives on
+  // stdout even though the process "fails" by git's own convention. Node's
+  // execFile attaches the child process's captured stdout to the rejected
+  // error object even on non-zero exit (verified empirically -- same
+  // mechanism that already attaches stderr, which the constructor above
+  // already reads); exposed here the same way exitCode is, rather than a
+  // second, error-message-parsing path for this one caller. Empty string
+  // (never undefined) when the failure produced no stdout at all.
+  readonly stdout: string;
+
   constructor(args: string[], cause: unknown) {
     const details = isExecFileError(cause) ? cause : undefined;
     const stderr = details?.stderr?.trim();
@@ -20,6 +32,7 @@ export class GitCommandError extends Error {
     super(`git ${args.join(" ")} failed${exitCodeSuffix}: ${reason}`);
     this.name = "GitCommandError";
     this.exitCode = details?.code;
+    this.stdout = details?.stdout?.trim() ?? "";
   }
 }
 
@@ -52,5 +65,30 @@ export class BranchNotFoundError extends Error {
   constructor(branch: string) {
     super(`No local branch named "${branch}" exists.`);
     this.name = "BranchNotFoundError";
+  }
+}
+
+// Working Tree Management: thrown by WorkingTreeService for "/showchanges
+// <index>" or "/discard <index>" when <index> doesn't resolve against a
+// freshly recomputed getChanges() list -- same "friendly domain error, not
+// raw git stderr" role CommitNotFoundError/BranchNotFoundError already play
+// (there is no git stderr here at all; the index is this codebase's own
+// concept, not git's).
+export class WorkingTreeChangeNotFoundError extends Error {
+  constructor(index: number) {
+    super(`No working-tree change found at index ${index}. Run /changes to see current indexes.`);
+    this.name = "WorkingTreeChangeNotFoundError";
+  }
+}
+
+// Working Tree Management: mirrors src/undo/errors.ts's
+// CannotExecuteUndoPlanError exactly -- a programmer error (ApplicationService
+// calling executeDiscardPlan() on a plan whose status isn't "ready"), never
+// reachable from user input, since ApplicationService only ever calls
+// executeDiscardPlan() after checking status itself.
+export class CannotExecuteDiscardPlanError extends Error {
+  constructor(status: string) {
+    super(`executeDiscardPlan() was called with a plan whose status is "${status}", not "ready".`);
+    this.name = "CannotExecuteDiscardPlanError";
   }
 }

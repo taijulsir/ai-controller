@@ -212,6 +212,65 @@ of the default active one, e.g. `/repo=my-repo status`.
 
 ---
 
+## Working Tree Management
+
+A safe way to inspect and selectively discard local working-tree changes, one file at a time,
+without touching commit history. Distinct from bare `/discard` above: that command is the fast,
+unconfirmed, whole-tree escape hatch (`reset --hard` + `clean`); this family is confirmation-gated,
+uses `git restore`/`git clean` exclusively (never `reset --hard`), and can target a single file.
+Both share the same Operation Journal (`rollbackStrategy: "restore-tree"`), so a discard performed
+through either one is reversible via `/undo confirm` immediately afterward — a discard is not a
+permanent action even though the command's own confirmation says it "cannot be undone through
+/discard itself."
+
+### `/changes`
+- **What it does**: Lists every local working-tree change — modified, staged, unstaged, added,
+  deleted, renamed, and untracked — grouped by status, each file numbered. That number is stable
+  for as long as the working tree doesn't change, and is what `/showchanges <index>` and
+  `/discard <index>` both address. Also reports staged/unstaged/untracked counts. Reports a clean
+  working tree message when there's nothing to show.
+- **When to use**: Before `/showchanges` or `/discard <index>`, to see what's actually changed and
+  find the index of the file you want.
+- **Type**: Manual, read-only.
+- **Example**: `/changes`
+
+### `/showchanges <index>`
+- **What it does**: Shows the diff for one file from `/changes`' own numbering — the real unified
+  diff (unstaged working-tree changes if present, else staged changes, else a synthetic
+  "entire file added" diff for an untracked file), truncated past 200 lines. Refuses with a clear
+  error if the index doesn't resolve (including "the working tree is currently clean").
+- **When to use**: To see exactly what changed in one file before deciding whether to keep or
+  discard it.
+- **Type**: Manual, read-only.
+- **Example**: `/showchanges 2`
+
+### `/discard <index>` / `/discard <index> confirm`
+- **What it does**: Discards changes for exactly one file from `/changes`' own numbering — modified,
+  staged, unstaged, added, deleted, or renamed, each handled with the safest applicable git
+  operation (`git restore --source=HEAD --staged --worktree` for anything that exists in HEAD,
+  `git restore --staged` + `git clean -fd` for a new/untracked/renamed-away path). Never touches
+  any other file. First reply previews what would be discarded and asks for confirmation; the
+  confirmation reply repeats the same index (there's no server-side session state remembering
+  which file an earlier, separate message meant) — reply with the exact command shown, e.g.
+  `/discard 3 confirm`.
+- **When to use**: To throw away one specific unwanted change without touching anything else in the
+  working tree.
+- **Type**: Manual, always confirmation-gated. Refuses while a task is running for the repository,
+  or while a merge/rebase/etc. is in progress (see `/health`).
+- **Example**: `/discard 3`, then `/discard 3 confirm`
+
+### `/discard all` / `/discard all confirm`
+- **What it does**: Discards every local working-tree change — the same net effect as bare
+  `/discard`, reached through this feature's own confirmation flow and richer reporting (affected
+  files, final staged/unstaged/untracked counts) instead of bare `/discard`'s instant, unconfirmed
+  one-shot. Reports "nothing to discard" when the tree is already clean.
+- **When to use**: To clear out everything at once, but with an explicit confirmation step and a
+  full list of what's about to go.
+- **Type**: Manual, always confirmation-gated. Same refusal conditions as `/discard <index>` above.
+- **Example**: `/discard all`, then `/discard all confirm`
+
+---
+
 ## Workflow command
 
 ### `/ship <message>`

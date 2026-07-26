@@ -226,3 +226,95 @@ export interface CommitDiffStatResult {
   insertions: number;
   deletions: number;
 }
+
+// ---------------------------------------------------------------------------
+// Working Tree Management (/changes, /showchanges, /discard <index>,
+// /discard all) -- additive to GitStatus/GitFileChange above, never a
+// replacement. GitStatus stays exactly as every existing consumer
+// (RepositoryIntelligenceService, DecisionEngine, StrategyEngine,
+// RecommendationEngine, GitHealthService) already reads it -- this is a
+// second, richer read over the same `git status --porcelain=v2` output
+// (see GitStatusParser.parseWorkingTreeChanges), needed because none of
+// those existing consumers need per-file status codes or a stable index to
+// address one file by, and GitStatus/parseGitStatus's existing behavior must
+// never change underneath them.
+// ---------------------------------------------------------------------------
+
+export type WorkingTreeChangeStatus = "modified" | "added" | "deleted" | "renamed" | "untracked";
+
+// One path's current working-tree change, addressed by a stable `index`
+// (1-based, assigned once per getChanges() call in a fixed grouping order --
+// see WorkingTreeService.getChanges()) -- /showchanges and /discard both
+// resolve their own <index> argument against a freshly recomputed list of
+// these, never a cached/remembered one, so "index 3" always means whatever
+// getChanges() would show as #3 right now.
+export interface WorkingTreeChange {
+  index: number;
+  path: string;
+  status: WorkingTreeChangeStatus;
+  // Whether this path has index-side (staged) and/or worktree-side
+  // (unstaged) differences -- independent booleans, not mutually exclusive:
+  // a file can be staged-modified and further modified since, in which case
+  // both are true. "untracked" paths are neither (see staged/unstaged count
+  // semantics below) -- untracked is its own bucket, matching
+  // GitHealthService/RepositoryHealthReport's existing three-way
+  // staged/unstaged/untracked split.
+  staged: boolean;
+  unstaged: boolean;
+  // Only set when status === "renamed" -- the path's name before the
+  // rename, needed to restore it (see WorkingTreeService.executeDiscardPlan).
+  renamedFrom?: string;
+}
+
+export interface WorkingTreeChangesResult {
+  repositoryId: string;
+  changes: WorkingTreeChange[];
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  isClean: boolean;
+}
+
+// /showchanges <index>'s own result -- the resolved change plus its diff
+// text. For an untracked file (no baseline to diff against) this is a
+// synthetic "entire file added" diff (git diff --no-index against an empty
+// file), the same shape a real diff has, just with no prior content to
+// compare -- never raw file content shown unlabeled as if it were a diff.
+export interface WorkingTreeChangeDiff {
+  change: WorkingTreeChange;
+  diff: string;
+}
+
+// /discard <index> vs. /discard all -- resolved eagerly by
+// WorkingTreeService.buildDiscardPlan() against a fresh getChanges() list
+// (see WorkingTreeChange's own doc comment on why "index" is never cached).
+export type DiscardTarget = { kind: "index"; index: number } | { kind: "all" };
+
+export type DiscardPlanStatus = "ready" | "nothing-to-discard" | "execution-in-progress" | "operation-in-progress";
+
+// Same shape convention as src/undo/types.ts's UndoPlan -- a status plus
+// fields that are only meaningful (non-empty) when status === "ready".
+export interface DiscardPlan {
+  status: DiscardPlanStatus;
+  repositoryId: string;
+  target: DiscardTarget;
+  // The specific file(s) this plan would discard -- empty unless "ready".
+  changes: WorkingTreeChange[];
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+}
+
+// executeDiscardPlan()'s result -- affectedFiles is exactly plan.changes'
+// paths (never re-derived), the remaining three fields are the *working
+// tree's* state immediately after discarding, i.e. a fresh getChanges() call,
+// so the caller can confirm the tree actually went clean (or report what's
+// still left) without a second round trip.
+export interface DiscardOutcome {
+  kind: "discarded";
+  affectedFiles: string[];
+  stagedCount: number;
+  unstagedCount: number;
+  untrackedCount: number;
+  isClean: boolean;
+}

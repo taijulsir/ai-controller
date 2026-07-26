@@ -8,9 +8,18 @@ import { GitCommandRunner } from "./GitCommandRunner";
 import { DEFAULT_RECENT_COMMITS_LIMIT, GitCommand } from "./GitConstants";
 import { GitCommandError, NoActiveRepositoryError } from "./errors";
 import { parseCommitMetadata, parseGitLog, parseNumstat } from "./GitLogParser";
-import { parseGitStatus } from "./GitStatusParser";
+import { parseGitStatus, parseWorkingTreeChanges } from "./GitStatusParser";
 import type { IGitAdapter } from "./interfaces";
-import type { CommitDiffStat, CommitMetadata, CommitSummary, GitFileChange, GitStatus, SubmoduleStatus, WorktreeInfo } from "./types";
+import type {
+  CommitDiffStat,
+  CommitMetadata,
+  CommitSummary,
+  GitFileChange,
+  GitStatus,
+  SubmoduleStatus,
+  WorkingTreeChange,
+  WorktreeInfo,
+} from "./types";
 
 export class GitAdapter implements IGitAdapter {
   constructor(
@@ -383,6 +392,75 @@ export class GitAdapter implements IGitAdapter {
       result.set(pathParts.join("\t"), added === "-" && deleted === "-");
     }
     return result;
+  }
+
+  // Working Tree Management: same command status() already runs
+  // (GitCommand.status()), a second, richer parse of its output -- see
+  // parseWorkingTreeChanges's own doc comment for why this is additive
+  // rather than a change to status()/GitStatus.
+  async getWorkingTreeChanges(): Promise<WorkingTreeChange[]> {
+    const output = await this.run(GitCommand.status());
+    return parseWorkingTreeChanges(output);
+  }
+
+  // /showchanges <index>: picks the one diff command that actually answers
+  // "what changed in this file" for the change's own staged/unstaged/
+  // untracked shape -- unstaged (working tree vs index) takes priority over
+  // staged (index vs HEAD) when both are true, since that is the more
+  // current, more likely-to-be-what-the-user-means content; untracked has no
+  // baseline at all, so it gets the synthetic added-file diff. A renamed
+  // file's diff is requested against both its old and new path together, so
+  // git's own default rename detection (not suppressed here, unlike every
+  // machine-parsed diff elsewhere in this file) can render it as a real
+  // "renamed" diff instead of a plain delete+add pair.
+  async getWorkingTreeChangeDiff(change: WorkingTreeChange): Promise<string> {
+    const paths = change.renamedFrom ? [change.renamedFrom, change.path] : [change.path];
+
+    if (change.unstaged) {
+      return this.run(GitCommand.diffWorkingTree(paths));
+    }
+    if (change.staged) {
+      return this.run(GitCommand.diffStaged(paths));
+    }
+    // Untracked (or a renamed path with neither flag set, which cannot
+    // actually occur -- parseWorkingTreeChanges never produces one, but
+    // falling through to the same "no baseline" diff here is still correct
+    // if it ever did, rather than an unhandled case).
+    try {
+      return await this.run(GitCommand.diffUntrackedAgainstEmpty(change.path));
+    } catch (error) {
+      // --no-index exits 1 whenever the two sides differ -- always true here
+      // (comparing against /dev/null), so this is the normal, successful
+      // outcome, not a failure, and its real diff text is on
+      // GitCommandError.stdout (see that field's own doc comment). Same
+      // exit-code-1-is-not-an-error handling as isAncestor() above.
+      if (error instanceof GitCommandError && error.exitCode === 1) {
+        return error.stdout;
+      }
+      throw error;
+    }
+  }
+
+  // Working Tree Management: /discard's three safe primitives -- see
+  // GitConstants.restoreFromHead/unstagePaths/removeUntrackedPaths for the
+  // git-level reasoning. Every one is a no-op for an empty paths array
+  // (WorkingTreeService always calls all three regardless of which one(s) a
+  // given discard actually needs, so this is the one place that keeps a
+  // partial selection from ever becoming an invalid, argument-less git
+  // invocation).
+  async restoreFromHead(paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await this.run(GitCommand.restoreFromHead(paths));
+  }
+
+  async unstagePaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await this.run(GitCommand.unstagePaths(paths));
+  }
+
+  async removeUntrackedPaths(paths: string[]): Promise<void> {
+    if (paths.length === 0) return;
+    await this.run(GitCommand.removeUntrackedPaths(paths));
   }
 
   private mapDiffStatus(statusCode: string): GitFileChange["status"] {

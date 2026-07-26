@@ -2,7 +2,16 @@ import type { ArtifactDeletionResult, ArtifactList, ArtifactMetadata } from "../
 import type { ExecutionResult } from "../controller/types";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
-import type { CommitDetail, CommitDiffStatResult, GitHistoryResult, RepositoryHealthReport } from "../git/types";
+import type {
+  CommitDetail,
+  CommitDiffStatResult,
+  DiscardOutcome,
+  DiscardPlan,
+  GitHistoryResult,
+  RepositoryHealthReport,
+  WorkingTreeChangeDiff,
+  WorkingTreeChangesResult,
+} from "../git/types";
 import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { ApprovalGateRequest } from "../gitorchestration/types";
 import type { RepositorySnapshot } from "../intelligence/types";
@@ -115,6 +124,13 @@ export interface IResponseFormatter {
   formatRecoveryResult(outcome: RecoveryOutcome | { kind: "nothing-to-recover" }): string;
   formatResumeResult(outcome: ConflictResolutionOutcome | { kind: "nothing-to-resume" }): string;
   formatAbortResult(outcome: { kind: "aborted"; operation: string } | { kind: "nothing-to-abort" }): string;
+  // Working Tree Management: /changes, /showchanges, /discard <index>,
+  // /discard all -- each is exactly what the matching ApplicationService
+  // method returned, laid out as text; none of them decide anything
+  // ApplicationService/WorkingTreeService hasn't already decided.
+  formatWorkingTreeChanges(result: WorkingTreeChangesResult): string;
+  formatWorkingTreeChangeDiff(result: WorkingTreeChangeDiff): string;
+  formatDiscardResult(result: DiscardPlan | DiscardOutcome): string;
   formatPipelineResult(result: PipelineResult): string;
   // Phase 12: result is exactly what AutonomousExecutionOrchestrator.attemptExecution()
   // returned -- undefined means nothing eligible was found, never a

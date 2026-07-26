@@ -4,12 +4,18 @@ import type {
   CommitDiffStatResult,
   CommitMetadata,
   CommitSummary,
+  DiscardOutcome,
+  DiscardPlan,
+  DiscardTarget,
   GitFileChange,
   GitHistoryFilter,
   GitHistoryResult,
   GitStatus,
   RepositoryHealthReport,
   SubmoduleStatus,
+  WorkingTreeChange,
+  WorkingTreeChangeDiff,
+  WorkingTreeChangesResult,
   WorktreeInfo,
 } from "./types";
 
@@ -135,6 +141,23 @@ export interface IGitAdapter {
   getCommitMetadata(hash: string): Promise<CommitMetadata>;
   getCommitFileChanges(hash: string): Promise<GitFileChange[]>;
   getCommitDiffStat(hash: string): Promise<CommitDiffStat[]>;
+
+  // Working Tree Management (/changes, /showchanges, /discard <index>,
+  // /discard all): read-only, mechanical primitives, no different in kind
+  // from the Git History & Inspection System ones above -- GitAdapter still
+  // never decides which files are "interesting" or which discard mechanism
+  // applies to a given change (that's WorkingTreeService's job, the same
+  // mechanism/policy split every other Foundation-layer service in this
+  // file already establishes).
+  getWorkingTreeChanges(): Promise<WorkingTreeChange[]>;
+  getWorkingTreeChangeDiff(change: WorkingTreeChange): Promise<string>;
+  // Mutating primitives, same "mechanical, judgment-free" contract as
+  // resetHard/cleanWorkingTree above -- WorkingTreeService alone decides
+  // which of the three applies to a given path and never calls resetHard for
+  // this feature. Every one is a safe no-op for an empty paths array.
+  restoreFromHead(paths: string[]): Promise<void>;
+  unstagePaths(paths: string[]): Promise<void>;
+  removeUntrackedPaths(paths: string[]): Promise<void>;
 }
 
 export interface IGitHealthService {
@@ -163,4 +186,31 @@ export interface IGitHistoryService {
   getHistory(repositoryId: string, filter: GitHistoryFilter): Promise<GitHistoryResult>;
   getCommitDetail(repositoryId: string, hash: string): Promise<CommitDetail>;
   getCommitDiffStat(repositoryId: string, hash: string): Promise<CommitDiffStatResult>;
+}
+
+// Working Tree Management (/changes, /showchanges, /discard <index>,
+// /discard all): the Foundation-layer composer for this feature, same role
+// GitHistoryService plays for /history/show/diff and GitHealthService plays
+// for /health -- composes GitAdapter's mechanical primitives into
+// ready-to-format results and, for discard, a two-phase build/execute plan
+// (see DiscardPlan's own doc comment for why that shape mirrors
+// src/undo/interfaces.ts's IUndoService exactly).
+export interface IWorkingTreeService {
+  getChanges(repositoryId: string): Promise<WorkingTreeChangesResult>;
+  // Throws WorkingTreeChangeNotFoundError when index doesn't resolve against
+  // a freshly recomputed getChanges() list.
+  getChangeDiff(repositoryId: string, index: number): Promise<WorkingTreeChangeDiff>;
+  // Phase 1: never mutates anything -- refuses (via DiscardPlanStatus) when a
+  // Claude task is currently executing for this repository, or a git-native
+  // operation (merge/rebase/etc.) is currently in progress, or the target
+  // resolves to zero files (only possible for target.kind === "all" on an
+  // already-clean tree; target.kind === "index" throws
+  // WorkingTreeChangeNotFoundError instead, the same way an unresolved
+  // /showchanges index does, since an index either names a real file or it
+  // doesn't).
+  buildDiscardPlan(repositoryId: string, target: DiscardTarget): Promise<DiscardPlan>;
+  // Phase 2: throws CannotExecuteDiscardPlanError if status isn't "ready" --
+  // ApplicationService only ever calls this after checking status itself,
+  // the same precondition IUndoService.executeUndoPlan() already documents.
+  executeDiscardPlan(plan: DiscardPlan): Promise<DiscardOutcome>;
 }

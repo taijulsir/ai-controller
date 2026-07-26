@@ -43,7 +43,13 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "sync", description: "Sync the current branch with its upstream" },
   { command: "merge", description: "Merge a branch into the current one" },
   { command: "rebase", description: "Rebase the current branch onto another" },
-  { command: "discard", description: "Discard all uncommitted changes" },
+  // Working Tree Management: bare "/discard" is unchanged (discards
+  // everything immediately, no confirmation); "/discard <index>"/"/discard
+  // all" (with their own "confirm" replies) are the new, confirmation-gated
+  // family described by "changes"/"showchanges" below.
+  { command: "discard", description: "Discard uncommitted changes (all at once, or one file via /changes)" },
+  { command: "changes", description: "List local working-tree changes, numbered for /showchanges and /discard" },
+  { command: "showchanges", description: "Show the diff for one file from /changes" },
   { command: "recover", description: "Recover from an interrupted git state" },
   { command: "health", description: "Repository health report" },
   { command: "resume", description: "Resume an in-progress merge or rebase" },

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import type { CommitDetail, CommitDiffStatResult, CommitSummary, GitHistoryResult } from "../../git/types";
+import type {
+  CommitDetail,
+  CommitDiffStatResult,
+  CommitSummary,
+  DiscardOutcome,
+  DiscardPlan,
+  GitHistoryResult,
+  WorkingTreeChange,
+  WorkingTreeChangeDiff,
+  WorkingTreeChangesResult,
+} from "../../git/types";
 import { JournalOperationType } from "../../journal/types";
 import { ResponseFormatter } from "../ResponseFormatter";
 
@@ -227,6 +237,194 @@ describe("ResponseFormatter: Git History & Inspection System", () => {
       expect(text).toContain(JournalOperationType.SwitchBranch);
       expect(text).toMatch(/confirm/);
       expect(text).not.toMatch(/\(commit /i);
+    });
+  });
+});
+
+function change(overrides: Partial<WorkingTreeChange> = {}): WorkingTreeChange {
+  return { index: 1, path: "src/foo.ts", status: "modified", staged: false, unstaged: true, ...overrides };
+}
+
+describe("ResponseFormatter: Working Tree Management", () => {
+  const formatter = new ResponseFormatter();
+
+  describe("formatWorkingTreeChanges", () => {
+    it("reports a clean working tree message when there are no changes", () => {
+      const result: WorkingTreeChangesResult = {
+        repositoryId: "repo-1",
+        changes: [],
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        isClean: true,
+      };
+      expect(formatter.formatWorkingTreeChanges(result)).toMatch(/clean working tree/i);
+    });
+
+    it("groups every status into its own section, each file numbered by its own index", () => {
+      const result: WorkingTreeChangesResult = {
+        repositoryId: "repo-1",
+        changes: [
+          change({ index: 1, path: "src/mod.ts", status: "modified" }),
+          change({ index: 2, path: "src/new.ts", status: "added", staged: true, unstaged: false }),
+          change({ index: 3, path: "src/gone.ts", status: "deleted" }),
+          change({ index: 4, path: "src/renamed-to.ts", status: "renamed", renamedFrom: "src/renamed-from.ts", staged: true }),
+          change({ index: 5, path: "src/untracked.ts", status: "untracked", staged: false, unstaged: false }),
+        ],
+        stagedCount: 2,
+        unstagedCount: 2,
+        untrackedCount: 1,
+        isClean: false,
+      };
+
+      const text = formatter.formatWorkingTreeChanges(result);
+
+      expect(text).toContain("Modified:");
+      expect(text).toContain("1.");
+      expect(text).toContain("src/mod.ts");
+      expect(text).toContain("Added:");
+      expect(text).toContain("2.");
+      expect(text).toContain("src/new.ts");
+      expect(text).toContain("Deleted:");
+      expect(text).toContain("3.");
+      expect(text).toContain("src/gone.ts");
+      expect(text).toContain("Renamed:");
+      expect(text).toContain("4.");
+      expect(text).toContain("src/renamed-from.ts");
+      expect(text).toContain("src/renamed-to.ts");
+      expect(text).toContain("Untracked:");
+      expect(text).toContain("5.");
+      expect(text).toContain("src/untracked.ts");
+      expect(text).toContain("Staged: 2");
+      expect(text).toContain("Unstaged: 2");
+      expect(text).toContain("Untracked: 1");
+    });
+
+    it("omits a section entirely when it has no entries", () => {
+      const result: WorkingTreeChangesResult = {
+        repositoryId: "repo-1",
+        changes: [change({ status: "untracked", staged: false, unstaged: false })],
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 1,
+        isClean: false,
+      };
+      const text = formatter.formatWorkingTreeChanges(result);
+      expect(text).not.toContain("Modified:");
+      expect(text).not.toContain("Added:");
+      expect(text).toContain("Untracked:");
+    });
+  });
+
+  describe("formatWorkingTreeChangeDiff", () => {
+    it("renders the file, status, and diff content", () => {
+      const result: WorkingTreeChangeDiff = { change: change(), diff: "@@ -1 +1 @@\n-old\n+new" };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+      expect(text).toContain("src/foo.ts");
+      expect(text).toContain("Modified");
+      expect(text).toContain("-old");
+      expect(text).toContain("+new");
+    });
+
+    it("reports no textual diff for an empty diff", () => {
+      const result: WorkingTreeChangeDiff = { change: change(), diff: "" };
+      expect(formatter.formatWorkingTreeChangeDiff(result)).toMatch(/no textual diff/i);
+    });
+
+    it("truncates a large diff and notes how many more lines exist", () => {
+      const bigDiff = Array.from({ length: 250 }, (_, i) => `+line ${i}`).join("\n");
+      const result: WorkingTreeChangeDiff = { change: change(), diff: bigDiff };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+      expect(text).toContain("+line 0");
+      expect(text).toContain("+line 199");
+      expect(text).not.toContain("+line 200");
+      expect(text).toMatch(/50 more line/);
+    });
+
+    it("shows old and new path for a renamed file", () => {
+      const result: WorkingTreeChangeDiff = {
+        change: change({ status: "renamed", renamedFrom: "src/old.ts", path: "src/new.ts" }),
+        diff: "diff --git a/src/old.ts b/src/new.ts",
+      };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+      expect(text).toContain("src/old.ts");
+      expect(text).toContain("src/new.ts");
+    });
+  });
+
+  describe("formatDiscardResult", () => {
+    it("reports nothing to discard when the tree is already clean", () => {
+      const plan: DiscardPlan = { status: "nothing-to-discard", repositoryId: "repo-1", target: { kind: "all" }, changes: [], stagedCount: 0, unstagedCount: 0, untrackedCount: 0 };
+      expect(formatter.formatDiscardResult(plan)).toMatch(/nothing to discard/i);
+    });
+
+    it("refuses while a task is running", () => {
+      const plan: DiscardPlan = { status: "execution-in-progress", repositoryId: "repo-1", target: { kind: "all" }, changes: [], stagedCount: 0, unstagedCount: 0, untrackedCount: 0 };
+      expect(formatter.formatDiscardResult(plan)).toMatch(/task is currently running/i);
+    });
+
+    it("refuses while a git operation is in progress", () => {
+      const plan: DiscardPlan = { status: "operation-in-progress", repositoryId: "repo-1", target: { kind: "all" }, changes: [], stagedCount: 0, unstagedCount: 0, untrackedCount: 0 };
+      expect(formatter.formatDiscardResult(plan)).toMatch(/merge, rebase, or other git operation/i);
+    });
+
+    it("shows a single-file confirmation prompt naming the exact file and the exact reply command", () => {
+      const plan: DiscardPlan = {
+        status: "ready",
+        repositoryId: "repo-1",
+        target: { kind: "index", index: 3 },
+        changes: [change({ index: 3, path: "src/foo.ts" })],
+        stagedCount: 0,
+        unstagedCount: 1,
+        untrackedCount: 0,
+      };
+      const text = formatter.formatDiscardResult(plan);
+      expect(text).toContain("src/foo.ts");
+      expect(text).toContain("/discard 3 confirm");
+    });
+
+    it("shows an all-files confirmation prompt listing every affected file and the exact reply command", () => {
+      const plan: DiscardPlan = {
+        status: "ready",
+        repositoryId: "repo-1",
+        target: { kind: "all" },
+        changes: [change({ index: 1, path: "src/a.ts" }), change({ index: 2, path: "src/b.ts" })],
+        stagedCount: 0,
+        unstagedCount: 2,
+        untrackedCount: 0,
+      };
+      const text = formatter.formatDiscardResult(plan);
+      expect(text).toContain("src/a.ts");
+      expect(text).toContain("src/b.ts");
+      expect(text).toContain("/discard all confirm");
+    });
+
+    it("reports the discard outcome after execution", () => {
+      const outcome: DiscardOutcome = {
+        kind: "discarded",
+        affectedFiles: ["src/foo.ts"],
+        stagedCount: 0,
+        unstagedCount: 0,
+        untrackedCount: 0,
+        isClean: true,
+      };
+      const text = formatter.formatDiscardResult(outcome);
+      expect(text).toContain("src/foo.ts");
+      expect(text).toMatch(/clean/i);
+    });
+
+    it("reports remaining counts when the tree isn't fully clean after a partial discard", () => {
+      const outcome: DiscardOutcome = {
+        kind: "discarded",
+        affectedFiles: ["src/foo.ts"],
+        stagedCount: 1,
+        unstagedCount: 0,
+        untrackedCount: 2,
+        isClean: false,
+      };
+      const text = formatter.formatDiscardResult(outcome);
+      expect(text).toContain("Staged: 1");
+      expect(text).toContain("Untracked: 2");
     });
   });
 });
