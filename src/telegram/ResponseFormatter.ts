@@ -873,16 +873,36 @@ export class ResponseFormatter implements IResponseFormatter {
   // own, only three fixed label/icon pairs. Ordered blocked -> warning ->
   // healthy, then alphabetically by task type within each group (see
   // ApplicationService.getFailureStatus).
+  // Failure State Self-Healing: each task type now renders as its own small
+  // block (task type, status, and -- for anything not healthy -- the
+  // consecutive count plus Last Failure/Last Success timestamps) separated
+  // by a dashed rule, rather than one line per task type, so the operational
+  // context (when did this last fail, has it ever succeeded) that makes
+  // troubleshooting from Telegram actually useful is visible without a
+  // second command. A healthy task type stays a compact two-line block --
+  // there's nothing operationally interesting to show once nothing is
+  // wrong.
   formatFailureStatus(states: TaskFailureStatus[]): string {
     if (states.length === 0) {
       return "✅ No task types have recorded any executions yet.";
     }
 
-    const lines = states.map((state) => {
-      const label = state.status === "blocked" ? "🔴 BLOCKED" : state.status === "warning" ? "⚠ WARNING" : "✅ Healthy";
-      return `${label} — ${this.code(state.taskType)}: Consecutive Failures: ${state.consecutiveFailures}`;
+    const blocks = states.map((state) => {
+      if (state.status === "healthy") {
+        return [this.code(state.taskType), "Healthy"].join("\n");
+      }
+      const label = state.status === "blocked" ? "🔴 BLOCKED" : "⚠ WARNING";
+      const lines = [this.code(state.taskType), `Status: ${label}`, `Consecutive Failures: ${state.consecutiveFailures}`];
+      if (state.lastFailure) {
+        lines.push("Last Failure:", this.formatAbsoluteTimestamp(state.lastFailure));
+      }
+      if (state.lastSuccess) {
+        lines.push("Last Success:", this.formatAbsoluteTimestamp(state.lastSuccess));
+      }
+      return lines.join("\n");
     });
-    return this.template("🧯", "Repository Failure Summary", lines);
+
+    return this.template("🧯", "Repository Failure Summary", [blocks.join(`\n${"-".repeat(34)}\n`)]);
   }
 
   // /clear-failures [taskType] -- always a plain confirmation, since

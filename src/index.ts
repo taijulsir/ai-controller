@@ -126,6 +126,22 @@ async function bootstrap(): Promise<void> {
   // fetching their own.
   const repositoryIntelligence = new RepositoryIntelligenceService(repositoryRegistry, configService);
   const projectMemory = new ProjectMemoryService(repositoryRegistry, configService);
+
+  // Failure State Self-Healing: a pure, advisory prerequisite check, same
+  // shape and same place in the sequence as EnvironmentValidator above --
+  // run once, immediately after ProjectMemoryService exists, before anything
+  // else reads failure state (DecisionEngine via StrategyEngine, /failures).
+  // Never throws: a missing/corrupted/schema-mismatched failure-state.json
+  // is rebuilt from Project Memory's own event history and persisted, so
+  // startup always continues with a valid file in place.
+  const failureStateReport = await projectMemory.validateAndRepairFailureState();
+  if (failureStateReport.status === "rebuilt") {
+    console.warn(
+      `project-memory: failure-state.json was ${failureStateReport.reason} -- rebuilt from Project Memory history ` +
+        `(${failureStateReport.repositoriesRecovered} repositor${failureStateReport.repositoriesRecovered === 1 ? "y" : "ies"} recovered).`,
+    );
+  }
+
   const sessionManager = new ClaudeSessionManager();
   const decisionEngine = new DecisionEngine(projectMemory, sessionManager);
   const contextBuilder = new ContextBuilder(projectMemory);

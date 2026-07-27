@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -9,6 +9,8 @@ import type { Repository } from "../../domain/repository/Repository";
 import type { IRepositoryRegistry } from "../../repositories/interfaces";
 import { FAILURE_BLOCK_THRESHOLD, ProjectMemoryService } from "../ProjectMemoryService";
 import type { ProjectMemoryEvent } from "../types";
+
+const FAILURE_STATE_FILE_NAME = "failure-state.json";
 
 const REPOSITORY_ID = "repo-1";
 
@@ -165,5 +167,117 @@ describe("ProjectMemoryService — failure state", () => {
     ]);
     const state = await service.getFailureState(REPOSITORY_ID, "sync" as never);
     expect(state?.consecutiveFailures).toBe(2);
+  });
+});
+
+// Failure State Self-Healing: validateAndRepairFailureState() is the
+// startup-time check -- must never throw, and must always leave a valid,
+// schema-stamped file on disk afterward, however bad the file it found was.
+describe("ProjectMemoryService — failure-state self-healing", () => {
+  let directory: string;
+  let service: ProjectMemoryService;
+  let failureStatePath: string;
+
+  beforeEach(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "project-memory-healing-"));
+    service = new ProjectMemoryService(fakeRegistry(), fakeConfigService(directory));
+    failureStatePath = path.join(directory, FAILURE_STATE_FILE_NAME);
+  });
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("treats a missing failure-state.json as a normal, recoverable startup condition", async () => {
+    const report = await service.validateAndRepairFailureState();
+    expect(report).toEqual({ status: "rebuilt", reason: "missing", repositoriesRecovered: 0 });
+
+    const written = JSON.parse(await readFile(failureStatePath, "utf8"));
+    expect(written.schemaVersion).toBe(1);
+    expect(typeof written.updatedAt).toBe("string");
+    expect(written.repositories).toEqual({});
+  });
+
+  it("recovers from corrupted (invalid JSON) failure-state.json without throwing", async () => {
+    await writeFile(failureStatePath, '{ "repositories": { "repo-1": { "sync": ', "utf8");
+
+    const report = await service.validateAndRepairFailureState();
+    expect(report.status).toBe("rebuilt");
+    expect(report.reason).toBe("invalid-json");
+
+    // Startup must be able to continue immediately afterward -- a normal
+    // read no longer sees the corrupted file.
+    expect(await service.getAllFailureStates(REPOSITORY_ID)).toEqual([]);
+  });
+
+  it("recovers from a schema mismatch (old pre-envelope bare-map format) without throwing", async () => {
+    // The exact shape ProjectMemoryService wrote before this feature existed
+    // -- no schemaVersion, no updatedAt, no "repositories" wrapper.
+    await writeFile(failureStatePath, JSON.stringify({ [REPOSITORY_ID]: { sync: { repositoryId: REPOSITORY_ID, taskType: "sync", consecutiveFailures: 3, blocked: false } } }), "utf8");
+
+    const report = await service.validateAndRepairFailureState();
+    expect(report.status).toBe("rebuilt");
+    expect(report.reason).toBe("schema-mismatch");
+  });
+
+  it("recovers from a partially-written (truncated) file without throwing", async () => {
+    await writeFile(failureStatePath, '{"schemaVersion":1,"updatedAt":"2026-07-2', "utf8");
+    const report = await service.validateAndRepairFailureState();
+    expect(report.status).toBe("rebuilt");
+    expect(report.reason).toBe("invalid-json");
+  });
+
+  it("leaves a valid, current-schema file untouched (status: valid, no rebuild)", async () => {
+    await service.recordTaskOutcome(REPOSITORY_ID, "sync" as never, "failure");
+    const beforeRaw = await readFile(failureStatePath, "utf8");
+
+    const report = await service.validateAndRepairFailureState();
+    expect(report).toEqual({ status: "valid" });
+
+    const afterRaw = await readFile(failureStatePath, "utf8");
+    expect(afterRaw).toBe(beforeRaw);
+  });
+
+  it("rebuilds correct consecutive-failure state from Project Memory history, including historical clears", async () => {
+    // sync: fail, fail, fail (=3 consecutive)
+    await service.record({ kind: "task", task: { type: "sync" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: failureResult("sync") });
+    await service.record({ kind: "task", task: { type: "sync" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: failureResult("sync") });
+    await service.record({ kind: "task", task: { type: "sync" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: failureResult("sync") });
+
+    // push-changes: fail x5 (blocked), then a manual clear, then fail once more (=1 consecutive again)
+    for (let i = 0; i < 5; i++) {
+      await service.record({ kind: "task", task: { type: "push-changes" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: failureResult("push-changes") });
+    }
+    await service.clearFailureState(REPOSITORY_ID, "push-changes" as never);
+    await service.record({ kind: "task", task: { type: "push-changes" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: failureResult("push-changes") });
+
+    // fix-bug: fail, then succeed (=0 consecutive, healthy again)
+    await service.record({ kind: "task", task: { type: "fix-bug" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: failureResult("fix-bug") });
+    await service.record({ kind: "task", task: { type: "fix-bug" } as never, repositoryId: REPOSITORY_ID }, { kind: "result", result: successResult("fix-bug") });
+
+    // Corrupt the derived file, forcing a rebuild purely from events.jsonl.
+    await writeFile(failureStatePath, "not json at all", "utf8");
+
+    const report = await service.validateAndRepairFailureState();
+    expect(report.status).toBe("rebuilt");
+    expect(report.repositoriesRecovered).toBe(1);
+
+    const sync = await service.getFailureState(REPOSITORY_ID, "sync" as never);
+    expect(sync?.consecutiveFailures).toBe(3);
+    expect(sync?.blocked).toBe(false);
+
+    const pushChanges = await service.getFailureState(REPOSITORY_ID, "push-changes" as never);
+    expect(pushChanges?.consecutiveFailures).toBe(1);
+    expect(pushChanges?.blocked).toBe(false);
+
+    const fixBug = await service.getFailureState(REPOSITORY_ID, "fix-bug" as never);
+    expect(fixBug?.consecutiveFailures).toBe(0);
+    expect(fixBug?.blocked).toBe(false);
+  });
+
+  it("is a no-op when memory is disabled", async () => {
+    const disabledService = new ProjectMemoryService(fakeRegistry(), fakeConfigService(directory, false));
+    const report = await disabledService.validateAndRepairFailureState();
+    expect(report).toEqual({ status: "skipped-memory-disabled" });
   });
 });

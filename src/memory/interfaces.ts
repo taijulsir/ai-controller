@@ -1,6 +1,6 @@
 import type { ExecutionRequest } from "../controller/types";
 import type { ExecutionCheckpoint, TaskType } from "../planner/types";
-import type { ProjectMemoryEvent, ProjectMemoryOutcome, TaskFailureState } from "./types";
+import type { FailureStateValidationReport, ProjectMemoryEvent, ProjectMemoryOutcome, TaskFailureState } from "./types";
 
 // Phase 13: the narrow, read-only view of IProjectMemoryService's history
 // query, carved out specifically for AutonomousExecutionWorker
@@ -62,7 +62,24 @@ export interface IFailureStateStore extends IFailureStateReader {
   clearAllFailureStates(repositoryId: string): Promise<void>;
 }
 
+// Failure State Self-Healing: a pure, read-then-maybe-write prerequisite
+// check the composition root runs once at bootstrap, right after
+// ProjectMemoryService is constructed -- same "mechanism vs policy" split as
+// IEnvironmentValidator (src/startup/): this method only reports what it
+// found and did; src/index.ts decides how to log it. Never throws for a
+// missing/corrupted/schema-mismatched file -- that's precisely the set of
+// conditions it exists to recover from, by rebuilding from Project Memory
+// history and persisting the result, so startup always continues.
+export interface IFailureStateValidator {
+  validateAndRepairFailureState(): Promise<FailureStateValidationReport>;
+}
+
 export interface IProjectMemoryService
-  extends IRecentExecutionHistoryProvider, IUndoableExecutionHistoryProvider, IUndoRecorder, IFailureStateStore {
+  extends
+    IRecentExecutionHistoryProvider,
+    IUndoableExecutionHistoryProvider,
+    IUndoRecorder,
+    IFailureStateStore,
+    IFailureStateValidator {
   record(request: ExecutionRequest, outcome: ProjectMemoryOutcome): Promise<void>;
 }

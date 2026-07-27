@@ -6,7 +6,14 @@ import type { ExecutionRequest } from "../controller/types";
 import type { ExecutionCheckpoint, TaskType } from "../planner/types";
 import type { IRepositoryRegistry } from "../repositories/interfaces";
 import type { IProjectMemoryService } from "./interfaces";
-import type { ProjectMemoryEvent, ProjectMemoryOutcome, TaskFailureState } from "./types";
+import {
+  FAILURE_STATE_SCHEMA_VERSION,
+  type FailureStateFile,
+  type FailureStateValidationReport,
+  type ProjectMemoryEvent,
+  type ProjectMemoryOutcome,
+  type TaskFailureState,
+} from "./types";
 
 const EVENTS_FILE_NAME = "events.jsonl";
 const FAILURE_STATE_FILE_NAME = "failure-state.json";
@@ -21,10 +28,13 @@ const DEFAULT_RECENT_EVENTS_LIMIT = 20;
 // split (critical once blocked) rather than redeclaring the number.
 export const FAILURE_BLOCK_THRESHOLD = 5;
 
-// repositoryId -> taskType -> state. A plain nested map (not the flat array
-// events.jsonl uses) since this is current derived state, not an append-only
-// log -- O(1) keyed access is what every read/write here actually needs.
-type FailureStateFile = Record<string, Record<string, TaskFailureState>>;
+// Failure State Self-Healing: the one place an empty envelope is built --
+// used both for "the file doesn't exist yet" (ENOENT) and "the file exists
+// but couldn't be trusted" (invalid JSON, wrong/missing schemaVersion,
+// malformed shape). Never constructed with stale data smuggled in.
+function emptyFailureStateFile(): FailureStateFile {
+  return { schemaVersion: FAILURE_STATE_SCHEMA_VERSION, updatedAt: new Date(), repositories: {} };
+}
 
 // Matches the ISO-8601 strings produced by Date.prototype.toJSON() (what
 // JSON.stringify uses for Date values), so a parse reviver can round-trip
@@ -110,7 +120,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
 
     return this.withFailureStateLock(async () => {
       const file = await this.readFailureStateFile(memoryConfig.directory);
-      const existing = file[repositoryId]?.[taskType];
+      const existing = file.repositories[repositoryId]?.[taskType];
       const now = new Date();
 
       const nextState: TaskFailureState =
@@ -125,7 +135,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
               blocked: (existing?.consecutiveFailures ?? 0) + 1 >= FAILURE_BLOCK_THRESHOLD,
             };
 
-      file[repositoryId] = { ...file[repositoryId], [taskType]: nextState };
+      file.repositories[repositoryId] = { ...file.repositories[repositoryId], [taskType]: nextState };
       await this.writeFailureStateFile(memoryConfig.directory, file);
       return nextState;
     });
@@ -135,17 +145,18 @@ export class ProjectMemoryService implements IProjectMemoryService {
   // -- same reasoning getRecentEvents() below already relies on: when memory
   // is disabled, recordTaskOutcome() above never persists anything, so the
   // file simply never exists and readFailureStateFile() naturally returns
-  // {} via the same ENOENT-means-empty path getRecentEvents() already uses.
+  // an empty envelope via the same ENOENT-means-empty path getRecentEvents()
+  // already uses.
   async getFailureState(repositoryId: string, taskType: TaskType): Promise<TaskFailureState | undefined> {
     const memoryConfig = this.configService.getControllerConfig().memory;
     const file = await this.readFailureStateFile(memoryConfig.directory);
-    return file[repositoryId]?.[taskType];
+    return file.repositories[repositoryId]?.[taskType];
   }
 
   async getAllFailureStates(repositoryId: string): Promise<TaskFailureState[]> {
     const memoryConfig = this.configService.getControllerConfig().memory;
     const file = await this.readFailureStateFile(memoryConfig.directory);
-    return Object.values(file[repositoryId] ?? {});
+    return Object.values(file.repositories[repositoryId] ?? {});
   }
 
   // /clear-failures sync -- resets one task type's counter. Always appends a
@@ -159,8 +170,8 @@ export class ProjectMemoryService implements IProjectMemoryService {
     if (memoryConfig.enabled) {
       await this.withFailureStateLock(async () => {
         const file = await this.readFailureStateFile(memoryConfig.directory);
-        if (file[repositoryId]) {
-          delete file[repositoryId][taskType];
+        if (file.repositories[repositoryId]) {
+          delete file.repositories[repositoryId][taskType];
         }
         await this.writeFailureStateFile(memoryConfig.directory, file);
       });
@@ -175,7 +186,7 @@ export class ProjectMemoryService implements IProjectMemoryService {
     if (memoryConfig.enabled) {
       await this.withFailureStateLock(async () => {
         const file = await this.readFailureStateFile(memoryConfig.directory);
-        delete file[repositoryId];
+        delete file.repositories[repositoryId];
         await this.writeFailureStateFile(memoryConfig.directory, file);
       });
     }
@@ -191,21 +202,185 @@ export class ProjectMemoryService implements IProjectMemoryService {
     return run;
   }
 
+  // Failure State Self-Healing: defensive at every call, not just at startup
+  // -- any read that can't produce a valid envelope (missing file, invalid
+  // JSON, or a shape isValidFailureStateFile rejects) falls back to a fresh
+  // empty envelope and logs a warning, exactly like the ENOENT case already
+  // did before this feature. This keeps ordinary operation just as resilient
+  // as startup; only validateAndRepairFailureState() below goes further and
+  // actually reconstructs real data from Project Memory history, and only at
+  // startup (rebuilding from the full event log on every ordinary read would
+  // be needless work for a condition this rare).
   private async readFailureStateFile(directory: string): Promise<FailureStateFile> {
+    let contents: string;
     try {
-      const contents = await readFile(this.failureStateFilePath(directory), "utf8");
-      return JSON.parse(contents, reviveDates) as FailureStateFile;
+      contents = await readFile(this.failureStateFilePath(directory), "utf8");
     } catch (error) {
       if (this.isFileNotFoundError(error)) {
-        return {};
+        return emptyFailureStateFile();
       }
       throw error;
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents, reviveDates);
+    } catch {
+      console.warn(`project-memory: failure-state.json contains invalid JSON -- treating as empty until it is next rebuilt or written.`);
+      return emptyFailureStateFile();
+    }
+    if (!this.isValidFailureStateFile(parsed)) {
+      console.warn(`project-memory: failure-state.json does not match the expected schema -- treating as empty until it is next rebuilt or written.`);
+      return emptyFailureStateFile();
+    }
+    return parsed;
   }
 
   private async writeFailureStateFile(directory: string, file: FailureStateFile): Promise<void> {
+    const stamped: FailureStateFile = { ...file, schemaVersion: FAILURE_STATE_SCHEMA_VERSION, updatedAt: new Date() };
     await mkdir(directory, { recursive: true });
-    await writeFile(this.failureStateFilePath(directory), JSON.stringify(file), "utf8");
+    await writeFile(this.failureStateFilePath(directory), JSON.stringify(stamped), "utf8");
+  }
+
+  // Deliberately shallow-but-real: checks the envelope's own fields and, for
+  // each repository bucket, that every entry at least has the numeric/boolean
+  // fields a TaskFailureState can't function without. Doesn't re-verify
+  // taskType/repositoryId against the outer keys -- a mismatch there would
+  // still produce a working (if slightly mislabeled) TaskFailureState, not a
+  // crash, so it isn't worth rejecting the whole file over. Anything less
+  // structured than this (wrong top-level type, missing repositories map,
+  // one entry missing consecutiveFailures/blocked entirely) is exactly the
+  // "schema mismatch" / "partially written" case this feature exists to
+  // recover from.
+  private isValidFailureStateFile(value: unknown): value is FailureStateFile {
+    if (typeof value !== "object" || value === null) {
+      return false;
+    }
+    const candidate = value as Partial<FailureStateFile>;
+    if (candidate.schemaVersion !== FAILURE_STATE_SCHEMA_VERSION) {
+      return false;
+    }
+    if (!(candidate.updatedAt instanceof Date) || Number.isNaN(candidate.updatedAt.getTime())) {
+      return false;
+    }
+    if (typeof candidate.repositories !== "object" || candidate.repositories === null) {
+      return false;
+    }
+    for (const bucket of Object.values(candidate.repositories)) {
+      if (typeof bucket !== "object" || bucket === null) {
+        return false;
+      }
+      for (const state of Object.values(bucket)) {
+        if (
+          typeof state !== "object" ||
+          state === null ||
+          typeof (state as Partial<TaskFailureState>).consecutiveFailures !== "number" ||
+          typeof (state as Partial<TaskFailureState>).blocked !== "boolean"
+        ) {
+          return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  // Failure State Self-Healing: the startup-time check. Reports what it
+  // found and, if the on-disk file couldn't be trusted, rebuilds it from
+  // Project Memory's own event log and persists the result -- never throws,
+  // so a missing/corrupted/schema-mismatched failure-state.json can never
+  // prevent the controller from starting.
+  async validateAndRepairFailureState(): Promise<FailureStateValidationReport> {
+    const memoryConfig = this.configService.getControllerConfig().memory;
+    if (!memoryConfig.enabled) {
+      return { status: "skipped-memory-disabled" };
+    }
+
+    const reason = await this.detectFailureStateProblem(memoryConfig.directory);
+    if (!reason) {
+      return { status: "valid" };
+    }
+
+    const rebuilt = await this.rebuildFailureStateFromEvents();
+    await this.writeFailureStateFile(memoryConfig.directory, rebuilt);
+    return { status: "rebuilt", reason, repositoriesRecovered: Object.keys(rebuilt.repositories).length };
+  }
+
+  private async detectFailureStateProblem(directory: string): Promise<FailureStateValidationReport["reason"] | undefined> {
+    let contents: string;
+    try {
+      contents = await readFile(this.failureStateFilePath(directory), "utf8");
+    } catch (error) {
+      if (this.isFileNotFoundError(error)) {
+        return "missing";
+      }
+      throw error;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(contents, reviveDates);
+    } catch {
+      return "invalid-json";
+    }
+    return this.isValidFailureStateFile(parsed) ? undefined : "schema-mismatch";
+  }
+
+  // Replays the entire Project Memory event log in chronological order
+  // (getRecentEvents() returns newest-first, so this reverses it back) to
+  // reconstruct exactly the same consecutive-failure state
+  // recordTaskOutcome() would have produced had failure-state.json never
+  // been lost -- including honoring any "failure-state-cleared" events that
+  // happened along the way, at the point in history they actually occurred.
+  //
+  // Same documented limitation as DecisionEngine's own workflow-keyed
+  // detection: a thrown error (outcome.kind === "error") carries only the
+  // error message in the stored event, never the originating task type, so
+  // it cannot be attributed to any task type's counter here -- only
+  // "result"-kind task outcomes (which carry taskResult.taskType) can be
+  // replayed. This is an honest gap in what the append-only log can
+  // reconstruct, not a bug in the rebuild itself; a future thrown error is
+  // still counted correctly going forward, by recordTaskOutcome(), the
+  // moment it happens.
+  private async rebuildFailureStateFromEvents(): Promise<FailureStateFile> {
+    const events = await this.getRecentEvents({ limit: Number.MAX_SAFE_INTEGER });
+    const chronological = [...events].reverse();
+
+    const repositories: Record<string, Record<string, TaskFailureState>> = {};
+
+    for (const event of chronological) {
+      const repositoryId = event.repositoryId;
+      if (!repositoryId) {
+        continue;
+      }
+
+      if (event.outcome.kind === "failure-state-cleared") {
+        if (event.outcome.taskType) {
+          delete repositories[repositoryId]?.[event.outcome.taskType];
+        } else {
+          delete repositories[repositoryId];
+        }
+        continue;
+      }
+      if (event.outcome.kind !== "result" || event.outcome.result.kind !== "task") {
+        continue;
+      }
+
+      const { taskType, success } = event.outcome.result.taskResult;
+      const bucket = (repositories[repositoryId] ??= {});
+      const existing = bucket[taskType];
+      bucket[taskType] = success
+        ? { repositoryId, taskType, consecutiveFailures: 0, lastFailure: existing?.lastFailure, lastSuccess: event.recordedAt, blocked: false }
+        : {
+            repositoryId,
+            taskType,
+            consecutiveFailures: (existing?.consecutiveFailures ?? 0) + 1,
+            lastFailure: event.recordedAt,
+            lastSuccess: existing?.lastSuccess,
+            blocked: (existing?.consecutiveFailures ?? 0) + 1 >= FAILURE_BLOCK_THRESHOLD,
+          };
+    }
+
+    return { schemaVersion: FAILURE_STATE_SCHEMA_VERSION, updatedAt: new Date(), repositories };
   }
 
   private failureStateFilePath(directory: string): string {

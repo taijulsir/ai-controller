@@ -62,3 +62,38 @@ export interface FailureClearResult {
   repositoryId: string;
   taskType?: TaskType;
 }
+
+// Failure State Self-Healing: current on-disk schema version for
+// failure-state.json. Bump this, and add a migration branch in
+// ProjectMemoryService's own validation, the day this envelope's shape ever
+// needs to change -- until then, any file whose schemaVersion doesn't match
+// this exact number is treated as a schema mismatch and rebuilt from
+// Project Memory history, never partially trusted.
+export const FAILURE_STATE_SCHEMA_VERSION = 1;
+
+// The on-disk envelope for failure-state.json, replacing the old bare
+// Record<repositoryId, Record<taskType, TaskFailureState>> map with one that
+// carries its own metadata -- schemaVersion (so a future format change can
+// be detected instead of silently misread) and updatedAt (so an operator
+// inspecting the file on disk can see when it was last written without
+// cross-referencing events.jsonl). Each TaskFailureState entry already
+// carries its own repositoryId/taskType fields, so per-record identity
+// doesn't need to be duplicated again at the envelope level.
+export interface FailureStateFile {
+  schemaVersion: number;
+  updatedAt: Date;
+  repositories: Record<string, Record<string, TaskFailureState>>;
+}
+
+// Result of ProjectMemoryService.validateAndRepairFailureState(), the
+// startup-time self-healing check -- logged by the composition root the same
+// way EnvironmentValidator's report is (see src/startup/), never thrown.
+export interface FailureStateValidationReport {
+  status: "valid" | "rebuilt" | "skipped-memory-disabled";
+  // Only set when status is "rebuilt" -- why the on-disk file couldn't be
+  // trusted as-is.
+  reason?: "missing" | "invalid-json" | "schema-mismatch";
+  // Only set when status is "rebuilt" -- how many repositories had at least
+  // one task type's state recovered from Project Memory history.
+  repositoriesRecovered?: number;
+}

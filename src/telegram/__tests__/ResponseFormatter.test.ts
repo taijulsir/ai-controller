@@ -428,3 +428,61 @@ describe("ResponseFormatter: Working Tree Management", () => {
     });
   });
 });
+
+// Failure State Self-Healing: /failures now surfaces Last Failure/Last
+// Success timestamps for anything not healthy -- scoped to what this
+// feature added.
+describe("ResponseFormatter: /failures operational context", () => {
+  const formatter = new ResponseFormatter();
+
+  it("shows a compact two-line block for a healthy task type, no timestamps", () => {
+    const text = formatter.formatFailureStatus([
+      { repositoryId: "repo-1", taskType: "implement-feature" as never, consecutiveFailures: 0, blocked: false, status: "healthy" },
+    ]);
+    expect(text).toContain("implement-feature");
+    expect(text).toContain("Healthy");
+    expect(text).not.toContain("Last Failure");
+    expect(text).not.toContain("Last Success");
+  });
+
+  it("shows Status, Consecutive Failures, Last Failure, and Last Success for a blocked task type", () => {
+    const text = formatter.formatFailureStatus([
+      {
+        repositoryId: "repo-1",
+        taskType: "sync" as never,
+        consecutiveFailures: 5,
+        blocked: true,
+        status: "blocked",
+        lastFailure: new Date("2026-07-27T17:02:00.000Z"),
+        lastSuccess: new Date("2026-07-25T09:18:00.000Z"),
+      },
+    ]);
+    expect(text).toContain("BLOCKED");
+    expect(text).toContain("Consecutive Failures: 5");
+    expect(text).toContain("Last Failure:");
+    expect(text).toContain("2026-07-27 17:02:00 UTC");
+    expect(text).toContain("Last Success:");
+    expect(text).toContain("2026-07-25 09:18:00 UTC");
+  });
+
+  it("omits Last Success when a task type has never succeeded", () => {
+    const text = formatter.formatFailureStatus([
+      { repositoryId: "repo-1", taskType: "push-changes" as never, consecutiveFailures: 2, blocked: false, status: "warning", lastFailure: new Date("2026-07-27T10:00:00.000Z") },
+    ]);
+    expect(text).toContain("WARNING");
+    expect(text).toContain("Last Failure:");
+    expect(text).not.toContain("Last Success");
+  });
+
+  it("separates multiple task-type blocks with a dashed rule", () => {
+    const text = formatter.formatFailureStatus([
+      { repositoryId: "repo-1", taskType: "sync" as never, consecutiveFailures: 5, blocked: true, status: "blocked", lastFailure: new Date() },
+      { repositoryId: "repo-1", taskType: "implement-feature" as never, consecutiveFailures: 0, blocked: false, status: "healthy" },
+    ]);
+    expect(text).toMatch(/-{10,}/);
+  });
+
+  it("reports no recorded executions when the list is empty", () => {
+    expect(formatter.formatFailureStatus([])).toContain("No task types have recorded any executions yet");
+  });
+});
