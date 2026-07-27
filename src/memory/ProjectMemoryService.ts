@@ -10,6 +10,7 @@ import {
   FAILURE_STATE_SCHEMA_VERSION,
   type FailureStateFile,
   type FailureStateValidationReport,
+  type PipelineBlockDetails,
   type ProjectMemoryEvent,
   type ProjectMemoryOutcome,
   type TaskFailureState,
@@ -392,6 +393,16 @@ export class ProjectMemoryService implements IProjectMemoryService {
   // same log, never a mutation of the checkpoint's own original event.
   async recordUndo(repositoryId: string, undoneCheckpointId: string): Promise<void> {
     await this.appendEvent(repositoryId, { kind: "undo", undoneCheckpointId });
+  }
+
+  // IPipelineBlockRecorder's one method: appends the "pipeline-blocked"
+  // outcome the same way every other write in this file shares one
+  // appendEvent() call. Never touches failure-state.json -- this is a plain
+  // audit fact about a decision ExecutionPipeline already made, not a task
+  // outcome, so it must never be able to influence recordTaskOutcome's
+  // consecutive-failure counter or anything downstream of it.
+  async recordPipelineBlock(repositoryId: string, details: PipelineBlockDetails): Promise<void> {
+    await this.appendEvent(repositoryId, { kind: "pipeline-blocked", ...details });
   }
 
   // IUndoableExecutionHistoryProvider's one method. Reuses getRecentEvents()

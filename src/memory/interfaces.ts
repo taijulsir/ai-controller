@@ -1,6 +1,12 @@
 import type { ExecutionRequest } from "../controller/types";
 import type { ExecutionCheckpoint, TaskType } from "../planner/types";
-import type { FailureStateValidationReport, ProjectMemoryEvent, ProjectMemoryOutcome, TaskFailureState } from "./types";
+import type {
+  FailureStateValidationReport,
+  PipelineBlockDetails,
+  ProjectMemoryEvent,
+  ProjectMemoryOutcome,
+  TaskFailureState,
+} from "./types";
 
 // Phase 13: the narrow, read-only view of IProjectMemoryService's history
 // query, carved out specifically for AutonomousExecutionWorker
@@ -74,12 +80,24 @@ export interface IFailureStateValidator {
   validateAndRepairFailureState(): Promise<FailureStateValidationReport>;
 }
 
+// Branch Blocking Observability: carved out for ExecutionPipeline the same
+// way IUndoRecorder is carved out for UndoService -- a dependency capable of
+// nothing except appending this one audit record, never reading history,
+// never touching failure state, never able to call the full record(). This
+// is deliberate: ExecutionPipeline's only reason to touch Project Memory at
+// all is to record that it blocked something, so its dependency's type
+// should say exactly that and nothing more.
+export interface IPipelineBlockRecorder {
+  recordPipelineBlock(repositoryId: string, details: PipelineBlockDetails): Promise<void>;
+}
+
 export interface IProjectMemoryService
   extends
     IRecentExecutionHistoryProvider,
     IUndoableExecutionHistoryProvider,
     IUndoRecorder,
     IFailureStateStore,
-    IFailureStateValidator {
+    IFailureStateValidator,
+    IPipelineBlockRecorder {
   record(request: ExecutionRequest, outcome: ProjectMemoryOutcome): Promise<void>;
 }

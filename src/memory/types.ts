@@ -1,3 +1,4 @@
+import type { Capability } from "../coordination/types";
 import type { ExecutionResult } from "../controller/types";
 import type { TaskType } from "../planner/types";
 
@@ -17,11 +18,33 @@ import type { TaskType } from "../planner/types";
 // mutation of any prior event" discipline as "undo" above. taskType is
 // undefined for "cleared every task type at once" (one event, not N) --
 // mirrors how "discard-all" is one outcome, not one per file.
+// Branch Blocking Observability: appended by ExecutionPipeline itself, the
+// one place a "blocked" DispatchDecision (BranchManagement, HumanReview, or
+// any future capability that returns "blocked" before ControllerCore.execute()
+// is ever reached) is produced -- see ExecutionPipeline.recordBlockedDecision's
+// own doc comment. Purely an audit record of a decision already made: it
+// carries no opinion and is never read back by anything that makes a
+// decision. In particular, ProjectMemoryService.updateFailureStateFromOutcome
+// only recognizes "result"/"error" outcomes, and DecisionEngine's own
+// detectors only recognize "result" outcomes -- both silently and
+// permanently ignore this kind, exactly the way they already ignore "undo"
+// and "failure-state-cleared", so a blocked decision can never move a
+// failure counter, an insight, or the blocking policy itself.
 export type ProjectMemoryOutcome =
   | { kind: "result"; result: ExecutionResult }
   | { kind: "error"; error: string }
   | { kind: "undo"; undoneCheckpointId: string }
-  | { kind: "failure-state-cleared"; taskType?: TaskType };
+  | { kind: "failure-state-cleared"; taskType?: TaskType }
+  | {
+      kind: "pipeline-blocked";
+      taskType: TaskType;
+      pipelineStage: Capability;
+      blockingReason: string;
+      currentBranch: string;
+      defaultBranch: string;
+      recommendedAction: string;
+      decisionSummary: string;
+    };
 
 export interface ProjectMemoryEvent {
   id: string;
@@ -84,6 +107,15 @@ export interface FailureStateFile {
   updatedAt: Date;
   repositories: Record<string, Record<string, TaskFailureState>>;
 }
+
+// Branch Blocking Observability: the payload IPipelineBlockRecorder.
+// recordPipelineBlock() takes -- everything the "pipeline-blocked" outcome
+// above carries except its own "kind" discriminant (repositoryId is supplied
+// separately, the same way every other record*/append* method in this file
+// takes repositoryId as its own parameter rather than duplicating it inside
+// the outcome payload). Derived with Omit/Extract rather than redeclared, so
+// the two shapes can never drift apart.
+export type PipelineBlockDetails = Omit<Extract<ProjectMemoryOutcome, { kind: "pipeline-blocked" }>, "kind">;
 
 // Result of ProjectMemoryService.validateAndRepairFailureState(), the
 // startup-time self-healing check -- logged by the composition root the same

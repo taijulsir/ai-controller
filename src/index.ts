@@ -454,6 +454,10 @@ async function bootstrap(): Promise<void> {
     planningEngine,
     executionCoordinator,
     controllerEntryPoint,
+    // Branch Blocking Observability: the same projectMemory instance built
+    // above (line ~128) -- ExecutionPipeline only ever sees it through the
+    // narrow IPipelineBlockRecorder slice of IProjectMemoryService.
+    projectMemory,
   );
 
   const plainControllerCore = new ControllerCore(repositoryRegistry, taskPlanner, workflowOrchestrator);

@@ -20,7 +20,7 @@ import type { RecoveryOutcome } from "../recovery/types";
 import type { UndoOutcome } from "../undo/types";
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { FailureClearResult, ProjectMemoryEvent, TaskFailureStatus } from "../memory/types";
-import type { PipelineResult, PipelineStepOutcome } from "../pipeline/types";
+import type { PipelineContext, PipelineResult, PipelineStepOutcome } from "../pipeline/types";
 import { TASK_CANCELLED_MESSAGE } from "../planner/errors";
 import type { Recommendation, RepositoryRecommendationReport } from "../recommendations/types";
 import type { RuntimeReport, RuntimeReportSection } from "../reporting/types";
@@ -250,7 +250,24 @@ export class ResponseFormatter implements IResponseFormatter {
       this.field("Working Tree", this.describeWorkingTree(workingTree)),
       this.field("Open Pull Requests", String(pullRequests.openCount)),
       this.field("Can Ship", workflowReadiness.canShip ? "Yes" : `No (${this.escapeHtml(workflowReadiness.blockers.join("; "))})`),
+      this.field("Implementation Status", this.describeImplementationSafety(branch)),
     ]);
+  }
+
+  // Branch Blocking Observability: a read-only, presentational label so
+  // /status answers "would implement-feature/fix-bug be blocked right now"
+  // without waiting for an actual blocked attempt. Deliberately NOT a call
+  // into StrategyEngine and NOT reused by it -- this recomputes the same two
+  // RepositorySnapshot.branch fields StrategyEngine's own implement-feature/
+  // fix-bug rule compares (see StrategyEngine.resolveRecommendedAction), as
+  // an entirely independent, display-only read with no path back into any
+  // decision. If that rule's inputs ever change, this label and
+  // StrategyEngine's actual behavior could in principle diverge -- an
+  // accepted tradeoff for keeping this a pure formatter concern with zero
+  // coupling to the decision engine, per this feature's own constraint of
+  // never touching StrategyEngine or the branch validation rule itself.
+  private describeImplementationSafety(branch: RepositorySnapshot["branch"]): string {
+    return branch.current === branch.default ? "⛔ Protected branch" : "✅ Safe for implementation";
   }
 
   // Same RepositorySnapshot getRepositoryStatus() already returns for
@@ -822,6 +839,13 @@ export class ResponseFormatter implements IResponseFormatter {
     if (event.outcome.kind === "failure-state-cleared") {
       return `🧯 failure counters cleared${event.outcome.taskType ? ` (${this.code(event.outcome.taskType)})` : " (all task types)"} (${timestamp})`;
     }
+    // Branch Blocking Observability: an audit-only record of a pipeline
+    // stage that blocked before ControllerCore.execute() was ever reached --
+    // rendered here the same way "undo"/"failure-state-cleared" already are,
+    // never as a task success/failure.
+    if (event.outcome.kind === "pipeline-blocked") {
+      return `⛔ ${this.humanizeCapability(event.outcome.pipelineStage)} blocked ${this.code(event.outcome.taskType)} (branch: ${this.code(event.outcome.currentBranch)}) (${timestamp})`;
+    }
 
     const { result } = event.outcome;
     if (result.kind === "task") {
@@ -1036,6 +1060,21 @@ export class ResponseFormatter implements IResponseFormatter {
       return this.formatCodeReview(lastOutcome.result.taskResult.output, lastOutcome.result.taskResult.artifacts);
     }
 
+    // Branch Blocking Observability: a "blocked" step is always the terminal
+    // outcome (dispatch() stops at the first blocked/skipped step, so it can
+    // only ever be last() -- see ExecutionPipeline.dispatch()). Rendered as
+    // its own self-contained block with full decision context (repository,
+    // current/default branch, reason, recommendation, decision time) instead
+    // of folded into the generic per-step checklist below, so the reply to a
+    // blocked request answers "why, on which branch, at what time" on its
+    // own -- this is precisely the information whose absence caused
+    // confusion when a repository's branch changed shortly after a blocked
+    // request (see the gcpay-backend investigation this feature followed
+    // from).
+    if (lastOutcome?.status === "blocked") {
+      return this.formatBlockedPipelineStep(lastOutcome, result.context);
+    }
+
     const lines = [this.field("Plan", this.humanizeRecommendedAction(result.strategy.recommendedAction)), ""];
     for (const outcome of result.stepOutcomes) {
       lines.push(this.formatPipelineStepOutcome(outcome));
@@ -1120,6 +1159,30 @@ export class ResponseFormatter implements IResponseFormatter {
       case "skipped":
         return `— ${label} skipped: ${this.escapeHtml(outcome.reason)}`;
     }
+  }
+
+  // Branch Blocking Observability: the rich, standalone rendering
+  // formatPipelineResult() reaches for whenever the terminal step outcome is
+  // "blocked" -- repository, current/default branch, the reason, the
+  // recommendation, and when the decision was made, all in one place.
+  // context.generatedAt is when PipelineContext's RepositorySnapshot was
+  // fetched (ExecutionPipeline.buildContext()), which is the exact instant
+  // the branch state below was read -- reusing it here means this timestamp
+  // can never disagree with the branch values shown next to it.
+  private formatBlockedPipelineStep(outcome: Extract<PipelineStepOutcome, { status: "blocked" }>, context: PipelineContext): string {
+    const { repository, branch } = context.repository;
+    return this.template("⛔", this.humanizeCapability(outcome.capability), [
+      this.field("Repository", this.code(repository.name)),
+      "",
+      this.field("Current Branch", this.code(branch.current)),
+      this.field("Default Branch", this.code(branch.default)),
+      "",
+      this.field("Decision", this.escapeHtml(outcome.explanation)),
+      "",
+      this.field("Recommendation", this.escapeHtml(outcome.recommendedAction)),
+      "",
+      this.field("Decision Time (UTC)", this.formatAbsoluteTimestamp(context.generatedAt)),
+    ]);
   }
 
   // Phase 8.10: the full report — title, health, summary, then every

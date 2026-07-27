@@ -281,3 +281,77 @@ describe("ProjectMemoryService — failure-state self-healing", () => {
     expect(report).toEqual({ status: "skipped-memory-disabled" });
   });
 });
+
+// Branch Blocking Observability: recordPipelineBlock() is a pure audit
+// write -- it must append to events.jsonl (so investigations can find it)
+// but must never touch failure-state.json, never count as a task
+// success/failure, and must never surface through the self-healing rebuild
+// as a task-type record.
+describe("ProjectMemoryService — pipeline-blocked audit events", () => {
+  let directory: string;
+  let service: ProjectMemoryService;
+
+  beforeEach(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "project-memory-blocked-"));
+    service = new ProjectMemoryService(fakeRegistry(), fakeConfigService(directory));
+  });
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("appends a retrievable pipeline-blocked event", async () => {
+    await service.recordPipelineBlock(REPOSITORY_ID, {
+      taskType: "fix-bug" as never,
+      pipelineStage: "BranchManagement" as never,
+      blockingReason: "current branch equals default branch",
+      currentBranch: "production_2026_mall",
+      defaultBranch: "production_2026_mall",
+      recommendedAction: "switch to an implementation branch",
+      decisionSummary: "StrategyEngine recommended CreateFeatureBranch",
+    });
+
+    const events = await service.getRecentEvents({ repositoryId: REPOSITORY_ID, limit: 10 });
+    expect(events).toHaveLength(1);
+    expect(events[0].outcome.kind).toBe("pipeline-blocked");
+    if (events[0].outcome.kind === "pipeline-blocked") {
+      expect(events[0].outcome.currentBranch).toBe("production_2026_mall");
+      expect(events[0].outcome.pipelineStage).toBe("BranchManagement");
+    }
+  });
+
+  it("never affects failure-state consecutive counters", async () => {
+    await service.record(taskRequest("fix-bug"), { kind: "result", result: failureResult("fix-bug") });
+    await service.recordPipelineBlock(REPOSITORY_ID, {
+      taskType: "fix-bug" as never,
+      pipelineStage: "BranchManagement" as never,
+      blockingReason: "x",
+      currentBranch: "a",
+      defaultBranch: "b",
+      recommendedAction: "y",
+      decisionSummary: "z",
+    });
+
+    const state = await service.getFailureState(REPOSITORY_ID, "fix-bug" as never);
+    expect(state?.consecutiveFailures).toBe(1); // unchanged by the audit event
+  });
+
+  it("is invisible to the self-healing rebuild (never produces a TaskFailureState)", async () => {
+    await service.recordPipelineBlock(REPOSITORY_ID, {
+      taskType: "sync" as never,
+      pipelineStage: "HumanReview" as never,
+      blockingReason: "x",
+      currentBranch: "a",
+      defaultBranch: "b",
+      recommendedAction: "y",
+      decisionSummary: "z",
+    });
+
+    // failure-state.json doesn't exist yet in this fresh directory -- the
+    // rebuild it triggers must recover zero repositories from the single
+    // pipeline-blocked event, since that event kind carries no TaskFailureState.
+    const report = await service.validateAndRepairFailureState();
+    expect(report).toEqual({ status: "rebuilt", reason: "missing", repositoriesRecovered: 0 });
+    expect(await service.getAllFailureStates(REPOSITORY_ID)).toEqual([]);
+  });
+});

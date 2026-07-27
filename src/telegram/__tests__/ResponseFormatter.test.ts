@@ -10,8 +10,25 @@ import type {
   WorkingTreeChangeDiff,
   WorkingTreeChangesResult,
 } from "../../git/types";
+import type { RepositorySnapshot } from "../../intelligence/types";
 import { JournalOperationType } from "../../journal/types";
+import type { PipelineContext, PipelineResult } from "../../pipeline/types";
+import type { TaskExecutionStrategy } from "../../strategy/types";
 import { ResponseFormatter } from "../ResponseFormatter";
+
+function repositorySnapshot(overrides: Partial<RepositorySnapshot["branch"]> = {}): RepositorySnapshot {
+  return {
+    repository: { id: "gcpay-backend", name: "GCPay Backend", path: "/tmp/gcpay-backend", defaultBranch: "production_2026_mall", active: true },
+    branch: { current: "production_2026_mall", default: "production_2026_mall", ahead: 0, behind: 0, ...overrides },
+    branches: ["production_2026_mall"],
+    workingTree: { isClean: true, staged: [], unstaged: [], untracked: [] },
+    recentCommits: [],
+    pullRequests: { open: [], openCount: 0 },
+    health: { isGitRepository: true, isClean: true, hasUnpushedCommits: false, isBehindRemote: false, hasOpenPullRequests: false, issues: [] },
+    workflowReadiness: { canShip: true, requiresApprovalBeforePush: false, requiresApprovalBeforePullRequest: false, blockers: [] },
+    generatedAt: new Date(),
+  };
+}
 
 function commit(overrides: Partial<CommitSummary> = {}): CommitSummary {
   return { sha: "6739c2e44833dbed637f3d9702fb03c378a7f2f2", shortSha: "6739c2e", message: "feat: redesign orchestration", author: "Taijul", date: new Date(), ...overrides };
@@ -484,5 +501,76 @@ describe("ResponseFormatter: /failures operational context", () => {
 
   it("reports no recorded executions when the list is empty", () => {
     expect(formatter.formatFailureStatus([])).toContain("No task types have recorded any executions yet");
+  });
+});
+
+// Branch Blocking Observability: scoped to what this feature added -- the
+// rich, standalone "blocked" pipeline-step rendering, and /status' new
+// Implementation Status label.
+describe("ResponseFormatter: Branch Blocking Observability", () => {
+  const formatter = new ResponseFormatter();
+
+  function fullPipelineResult(snapshot: RepositorySnapshot, recommendedAction: TaskExecutionStrategy["recommendedAction"]): PipelineResult {
+    const context: PipelineContext = { task: { type: "fix-bug", input: { description: "fix cron" } }, repositoryId: snapshot.repository.id, repository: snapshot, generatedAt: new Date("2026-07-27T17:02:00.000Z") };
+    const strategy: TaskExecutionStrategy = {
+      repositoryId: snapshot.repository.id,
+      taskType: "fix-bug",
+      sessionPolicy: { action: "start-new", reason: "no-active-session" },
+      contextPolicy: { includeRelevantHistory: false, relevantHistoryCount: 0, warnings: [] },
+      executionPriority: "blocked",
+      approvalExpectation: { expected: false },
+      recommendedAction,
+      executionReadiness: { ready: false, blockers: [] },
+      safetyRecommendations: [],
+      generatedAt: context.generatedAt,
+    };
+    return {
+      path: "full",
+      context,
+      strategy,
+      plan: { repositoryId: snapshot.repository.id, task: context.task, strategy, steps: [], generatedAt: context.generatedAt },
+      program: { repositoryId: snapshot.repository.id, plan: { repositoryId: snapshot.repository.id, task: context.task, strategy, steps: [], generatedAt: context.generatedAt }, steps: [], generatedAt: context.generatedAt },
+      stepOutcomes: [
+        {
+          status: "blocked",
+          capability: "BranchManagement",
+          explanation: "Implementation is blocked because the current branch is the repository's protected default branch.",
+          recommendedAction: "Switch to an implementation branch and retry.",
+        },
+      ],
+      completed: false,
+    };
+  }
+
+  it("renders repository, current/default branch, decision, recommendation, and decision time for a blocked step", () => {
+    const snapshot = repositorySnapshot({ current: "production_2026_mall", default: "production_2026_mall" });
+    const text = formatter.formatPipelineResult(fullPipelineResult(snapshot, "CreateFeatureBranch"));
+
+    expect(text).toContain("GCPay Backend"); // repository display name, matching formatRepositoryStatus' own "Repository" field precedent
+    expect(text).toContain("production_2026_mall");
+    expect(text).toContain("Implementation is blocked because the current branch is the repository's protected default branch.");
+    expect(text).toContain("Switch to an implementation branch and retry.");
+    expect(text).toContain("2026-07-27 17:02:00 UTC");
+    expect(text).not.toContain("Plan:"); // the generic per-step preamble is replaced entirely for a blocked outcome
+  });
+
+  it("distinguishes current from default branch when they differ", () => {
+    const snapshot = repositorySnapshot({ current: "mall_international_delivery_2026", default: "production_2026_mall" });
+    const text = formatter.formatPipelineResult(fullPipelineResult(snapshot, "ReviewRepository"));
+
+    expect(text).toContain("mall_international_delivery_2026");
+    expect(text).toContain("production_2026_mall");
+  });
+
+  it("/status shows 'Safe for implementation' when current branch differs from default", () => {
+    const text = formatter.formatRepositoryStatus(repositorySnapshot({ current: "mall_international_delivery_2026", default: "production_2026_mall" }));
+    expect(text).toContain("Safe for implementation");
+    expect(text).not.toContain("Protected branch");
+  });
+
+  it("/status shows 'Protected branch' when current branch equals default", () => {
+    const text = formatter.formatRepositoryStatus(repositorySnapshot({ current: "production_2026_mall", default: "production_2026_mall" }));
+    expect(text).toContain("Protected branch");
+    expect(text).not.toContain("Safe for implementation");
   });
 });

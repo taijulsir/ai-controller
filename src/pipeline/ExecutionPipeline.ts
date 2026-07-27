@@ -4,6 +4,7 @@ import type { CapabilityProgram, CapabilityStep } from "../coordination/types";
 import type { IControllerCore } from "../controller/interfaces";
 import type { ExecutionRequest, ExecutionResult } from "../controller/types";
 import type { IRepositoryIntelligenceService } from "../intelligence/interfaces";
+import type { IPipelineBlockRecorder } from "../memory/interfaces";
 import type { Task } from "../planner/types";
 import type { IPlanningEngine } from "../planning/interfaces";
 import type { IExecutionStrategyEngine } from "../strategy/interfaces";
@@ -62,6 +63,13 @@ export class ExecutionPipeline implements IExecutionPipeline {
     private readonly planningEngine: IPlanningEngine,
     private readonly executionCoordinator: IExecutionCoordinator,
     private readonly controllerCore: IControllerCore,
+    // Branch Blocking Observability: the only other Project Memory
+    // dependency this class holds, deliberately the narrowest possible slice
+    // (IPipelineBlockRecorder, not IProjectMemoryService) -- see that
+    // interface's own doc comment. Used exactly once, in
+    // recordBlockedDecision() below, purely to leave an audit trail; it is
+    // never consulted by any decision this class or its collaborators make.
+    private readonly pipelineBlockRecorder: IPipelineBlockRecorder,
   ) {}
 
   async run(request: PipelineRequest): Promise<PipelineResult> {
@@ -82,7 +90,7 @@ export class ExecutionPipeline implements IExecutionPipeline {
     const plan = this.planningEngine.buildPlan({ task: context.task, strategy, repository: context.repository });
     const program = this.executionCoordinator.buildProgram(plan);
 
-    const stepOutcomes = await this.dispatch(program, correlationId);
+    const stepOutcomes = await this.dispatch(program, correlationId, context);
 
     return {
       path: "full",
@@ -138,7 +146,7 @@ export class ExecutionPipeline implements IExecutionPipeline {
   // applies the same simple rule at the pipeline level, it doesn't add new
   // retry/recovery policy of its own. A "blocked" or "skipped" step is
   // exactly as final as a failure: nothing after it runs.
-  private async dispatch(program: CapabilityProgram, correlationId: string): Promise<PipelineStepOutcome[]> {
+  private async dispatch(program: CapabilityProgram, correlationId: string, context: PipelineContext): Promise<PipelineStepOutcome[]> {
     const outcomes: PipelineStepOutcome[] = [];
 
     for (const step of program.steps) {
@@ -151,6 +159,7 @@ export class ExecutionPipeline implements IExecutionPipeline {
           explanation: decision.explanation,
           recommendedAction: decision.recommendedAction,
         });
+        await this.recordBlockedDecision(context, program, step, decision);
         break;
       }
       if (decision.kind === "skipped") {
@@ -167,6 +176,42 @@ export class ExecutionPipeline implements IExecutionPipeline {
     }
 
     return outcomes;
+  }
+
+  // Branch Blocking Observability: the one place a "blocked" DispatchDecision
+  // -- today BranchManagement or HumanReview, structurally any future
+  // capability that resolveDispatch() ever returns "blocked" for -- gets a
+  // permanent audit record, since it terminates the pipeline before
+  // ControllerCore.execute() (and therefore MemoryRecordingControllerCore)
+  // is ever reached. Purely informational: awaited so the write completes
+  // before this method returns (there's no execution race to protect here,
+  // unlike MemoryRecordingControllerCore's fire-and-forget recording of a
+  // real ControllerCore.execute() call), but wrapped in try/catch so a
+  // memory-write failure can never surface to the caller or change the
+  // "blocked" outcome already decided above -- the exact same
+  // never-affects-the-real-outcome contract MemoryRecordingControllerCore's
+  // own recordSafely() documents for itself.
+  private async recordBlockedDecision(
+    context: PipelineContext,
+    program: CapabilityProgram,
+    step: CapabilityStep,
+    decision: Extract<DispatchDecision, { kind: "blocked" }>,
+  ): Promise<void> {
+    try {
+      await this.pipelineBlockRecorder.recordPipelineBlock(context.repositoryId, {
+        taskType: program.plan.task.type,
+        pipelineStage: step.capability,
+        blockingReason: decision.explanation,
+        currentBranch: context.repository.branch.current,
+        defaultBranch: context.repository.branch.default,
+        recommendedAction: decision.recommendedAction,
+        decisionSummary:
+          `StrategyEngine recommended "${program.plan.strategy.recommendedAction}"; ` +
+          `capability "${step.capability}" is required but ExecutionPipeline has no automated way to dispatch it.`,
+      });
+    } catch (error) {
+      console.error("pipeline-block-audit: failed to record blocked decision:", error instanceof Error ? error.message : error);
+    }
   }
 
   // The one place a Capability is translated into real work. For

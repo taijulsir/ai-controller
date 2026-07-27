@@ -35,6 +35,7 @@ function fakeProjectMemory(overrides: {
     clearFailureState: async () => {},
     clearAllFailureStates: async () => {},
     validateAndRepairFailureState: async () => ({ status: "valid" }),
+    recordPipelineBlock: async () => {},
   };
 }
 
