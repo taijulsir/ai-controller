@@ -222,3 +222,53 @@ describe("CommandParser: Git History & Inspection System", () => {
     expect(parsed).toEqual({ kind: "query", query: { type: "git-show", hash: "6739c2e" }, repositoryId: "test-ai-controller" });
   });
 });
+
+// Repository Failure Policy redesign: /failures (a pure read, dispatched
+// through QUERY_COMMANDS) and /clear-failures [taskType] (its own dedicated
+// block, since it takes an optional task-type argument QUERY_COMMANDS can't
+// express) -- scoped to what this feature added, same convention as the
+// Git History & Inspection System's own test file above.
+describe("CommandParser: Repository Failure Policy", () => {
+  const parser = new CommandParser();
+
+  it("/failures parses to a bare query with no arguments", () => {
+    expect(parser.parse("/failures")).toEqual({ kind: "query", query: { type: "failures" }, repositoryId: undefined });
+  });
+
+  it("bare /clear-failures clears every task type", () => {
+    expect(parser.parse("/clear-failures")).toEqual({ kind: "query", query: { type: "clear-failures" }, repositoryId: undefined });
+  });
+
+  it("/clear-failures sync clears just sync", () => {
+    expect(parser.parse("/clear-failures sync")).toEqual({
+      kind: "query",
+      query: { type: "clear-failures", taskType: "sync" },
+      repositoryId: undefined,
+    });
+  });
+
+  it("/clear-failures push-changes clears just push-changes", () => {
+    expect(parser.parse("/clear-failures push-changes")).toEqual({
+      kind: "query",
+      query: { type: "clear-failures", taskType: "push-changes" },
+      repositoryId: undefined,
+    });
+  });
+
+  it("rejects an unknown task type", () => {
+    expect(() => parser.parse("/clear-failures not-a-real-task-type")).toThrow(CommandParseError);
+  });
+
+  it("repo= override works for both new commands", () => {
+    expect(parser.parse("/failures repo=test-ai-controller")).toEqual({
+      kind: "query",
+      query: { type: "failures" },
+      repositoryId: "test-ai-controller",
+    });
+    expect(parser.parse("/clear-failures sync repo=test-ai-controller")).toEqual({
+      kind: "query",
+      query: { type: "clear-failures", taskType: "sync" },
+      repositoryId: "test-ai-controller",
+    });
+  });
+});

@@ -16,6 +16,10 @@ export const BOT_COMMANDS: readonly BotCommand[] = [
   { command: "help", description: "List available commands" },
   { command: "status", description: "Repository status snapshot" },
   { command: "insights", description: "Derived repository insights" },
+  // Repository Failure Policy redesign: "clear-failures" cannot appear here
+  // (contains a hyphen, same restriction documented above) but still works
+  // fully when typed -- same precedent as "create-pr"/"list-prs"/"auto-execute".
+  { command: "failures", description: "Per-task-type consecutive failure status" },
   { command: "recommendations", description: "Current ranked recommendations" },
   { command: "session", description: "Claude session status" },
   // Git History & Inspection System: "history" is no longer task/workflow

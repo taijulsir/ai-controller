@@ -1,4 +1,4 @@
-import type { Task } from "../planner/types";
+import type { Task, TaskType } from "../planner/types";
 
 export interface TelegramCallbackQuery {
   id: string;
@@ -65,6 +65,19 @@ export type ApplicationQuery =
   // part of.
   | { type: "task-history"; limit?: number }
   | { type: "insights" }
+  // Repository Failure Policy redesign: /failures -- a bare, top-level
+  // query, same shape as "insights"/"status" (no arguments of its own).
+  | { type: "failures" }
+  // /clear-failures [taskType] -- taskType undefined means "clear every task
+  // type for this repository," parsed by CommandParser's own dedicated
+  // block (same "argument shape decides the query's own parameters" pattern
+  // "discard-change"/"discard-all" already use for themselves). Unlike
+  // discard-all/artifact-delete-all, there is no `confirmed` field here --
+  // clearing a derived failure counter destroys nothing irreversible (the
+  // underlying ProjectMemoryEvent history is untouched and this already
+  // self-heals on the next success), so it acts immediately, the same way
+  // /session reset and /task cancel already do without a confirm gate.
+  | { type: "clear-failures"; taskType?: TaskType }
   | { type: "session" }
   // Phase E (Claude Session Management): part of the "session" command
   // family (/session, /session reset, /session stop), parsed by

@@ -1,4 +1,4 @@
 export * from "./interfaces";
 export * from "./types";
 export { MemoryRecordingControllerCore } from "./MemoryRecordingControllerCore";
-export { ProjectMemoryService } from "./ProjectMemoryService";
+export { FAILURE_BLOCK_THRESHOLD, ProjectMemoryService } from "./ProjectMemoryService";

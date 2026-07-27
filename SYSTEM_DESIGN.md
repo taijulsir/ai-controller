@@ -67,13 +67,26 @@ below.
 ### ProjectMemoryService
 
 Appends one JSON line per execution to `<memory.directory>/events.jsonl` — an
-`ProjectMemoryEvent { id, recordedAt, repositoryId?, outcome }`, where `outcome` is either
-`{kind: "result", result: ExecutionResult}` or `{kind: "error", error: string}` (only the
-error's message is retained for error outcomes — the original task type is not, a known,
-documented data limitation that affects `DecisionEngine`'s repeated-failure detection).
+`ProjectMemoryEvent { id, recordedAt, repositoryId?, outcome }`, where `outcome` is one of
+`{kind: "result", result: ExecutionResult}`, `{kind: "error", error: string}`,
+`{kind: "undo", undoneCheckpointId}`, or (Repository Failure Policy redesign)
+`{kind: "failure-state-cleared", taskType?}` (see below).
 `getRecentEvents()` reads the whole file, revives ISO date strings back into `Date` objects
 recursively, filters by repository, reverses to newest-first, and slices to a limit (default
 20). No caching, no rotation — the file only grows for the process's lifetime.
+
+Alongside `events.jsonl`, `ProjectMemoryService` also owns a second, mutable file,
+`<memory.directory>/failure-state.json` — a nested map (`repositoryId → taskType →
+TaskFailureState`) holding the **current**, derived state the Repository Failure Policy
+(below) reasons about, distinct from the append-only event log. Every `record()` call updates
+it as a side effect (`updateFailureStateFromOutcome`), for `"task"`-kind requests only. Unlike
+the old repeated-failure detection this replaces, a thrown error (`outcome.kind === "error"`)
+now counts as a failure here — `record()` reads `request.task.type` directly before the
+outcome is inspected, so the old "error outcomes carry no task type" limitation (still true,
+and still relevant to the unchanged workflow-keyed detection path below) doesn't apply to the
+task-type path anymore. Read-modify-write cycles are serialized through an in-process async
+write-queue, since `MemoryRecordingControllerCore` records fire-and-forget — sufficient for
+this app's single-instance PM2/systemd deployment, not a multi-process lock.
 
 `MemoryRecordingControllerCore` decorates `IControllerCore`, wrapping the **outermost** layer
 (above `ApprovalEngine`) in the composition root, so every execution that crosses it —
@@ -121,14 +134,54 @@ independent detectors plus one composite meta-detector fed by the other eight's 
 | `unpushed-commits` | info | no | `branch.ahead > 0` |
 | `stale-branch` | warning | yes | `branch.behind > 5`, or most recent commit older than 14 days |
 | `unfinished-workflow` | warning | yes | a recorded workflow-kind memory event with `status: "failed"` (one insight per matching event) |
-| `repeated-failures` | warning, or **critical** if ≥4 occurrences | yes | ≥2 failed task results sharing a task type, or ≥2 failed workflow results sharing a workflow id, in recent history |
+| `repeated-failures` (task-type) | warning at 2, **critical** at 5 *consecutive* failures | yes | sourced from `ProjectMemoryService`'s persisted per-`(repositoryId, taskType)` counter — a single success resets it to 0 (see [Repository Failure Policy](#repository-failure-policy) below) |
+| `repeated-failures` (workflow) | warning, or **critical** if ≥4 occurrences | yes | unchanged from before this redesign: ≥2 failed workflow results sharing a workflow id, *cumulative* over recent history (workflows have no single task-type identity to key a consecutive counter off) |
 | `approval-required` | info | no | `workflowReadiness.requiresApprovalBeforePush` and/or `...BeforePullRequest` (up to two insights) |
 | `open-pull-requests` | info | no | `pullRequests.openCount > 0` |
 | `session-expired` | info | no | session status is `"expired"` |
-| `risky-situation` | critical | yes | ≥2 of the above already have severity `warning`/`critical` — a meta-insight computed last, carrying `contributingKinds` |
+| `risky-situation` | critical | yes | ≥2 of the above already have severity `warning`/`critical` — a meta-insight computed last, carrying `contributingKinds`. Still critical, still shown in `/insights` and still elevates `executionPriority` — but (Repository Failure Policy redesign) no longer blocks execution on its own; see below. |
 
 `notificationWorthy` on every insight feeds `ProactiveMonitor` (below); `RepositoryInsightReport`
 also exposes a pre-filtered `notificationWorthyInsights` list.
+
+### Repository Failure Policy
+
+Redesigned to be **task-specific** and **consecutive**, replacing an earlier policy where any
+critical insight (including an unrelated task type's repeated failures, or a critical
+`risky-situation` meta-insight) blocked *every* mutating task type.
+
+- **Task-specific**: `StrategyEngine.buildExecutionReadiness()` blocks a task only when there is
+  a critical `repeated-failures` insight whose `taskType` equals the task actually being
+  requested (`insight.kind === "repeated-failures" && insight.severity === "critical" &&
+  insight.taskType === task.type`). Five consecutive `sync` failures block `sync` and nothing
+  else — `implement-feature`, `fix-bug`, `review-code`, etc. remain fully executable. A
+  workflow-keyed `repeated-failures` insight (`taskType` always `undefined`) can never satisfy
+  this condition, so it — like `risky-situation` and every other insight kind — stays
+  informational-only (still visible via `/insights`, still feeds `executionPriority` and
+  `safetyRecommendations`) without gating readiness.
+- **Consecutive, not cumulative**: `ProjectMemoryService`'s `failure-state.json` (see
+  [ProjectMemoryService](#projectmemoryservice) above) tracks `consecutiveFailures` per
+  `(repositoryId, taskType)`. Any successful execution of that task type resets the counter to
+  0 immediately — an old failure followed by successes never counts toward a future block.
+- **Threshold**: 5 consecutive failures (`FAILURE_BLOCK_THRESHOLD`, `ProjectMemoryService.ts`) —
+  raised from the old cumulative threshold of 4. A warning-level insight still appears at 2
+  consecutive failures (`CONSECUTIVE_FAILURE_WARNING_THRESHOLD`, `DecisionEngine.ts`).
+- **Automatic recovery**: `blocked` is derived, not stored independently — the moment a task
+  type's next execution succeeds, `consecutiveFailures` resets to 0 and `blocked` becomes
+  `false` in the same write, with no manual step. The very next attempt of that task type is
+  immediately executable again.
+- **Manual clearing** — Telegram: `/failures` lists every task type with a recorded attempt,
+  labeled `BLOCKED` (≥5 consecutive), `WARNING` (≥2), or `Healthy`, ordered blocked → warning →
+  healthy then alphabetically. `/clear-failures <taskType>` resets one task type's counter;
+  bare `/clear-failures` resets every task type for the repository. Neither requires a
+  "confirm" step or admin rights — clearing a derived counter destroys nothing irreversible
+  (the underlying `events.jsonl` history is untouched, and the block already self-heals on the
+  next success regardless) — but both append a `"failure-state-cleared"` audit event to
+  `events.jsonl` (visible in `/task history`), so every clear is still auditable.
+- **Preserved unchanged**: approval workflow (`ApprovalEngine`/`ApprovalPolicy`), dirty
+  working-tree/merge-conflict/in-progress-operation detection (`src/git`, `src/gitorchestration`),
+  and recovery planning (`src/recovery`) — none of these read `Insight[]`/`RepositoryInsightReport`
+  and none were touched by this redesign.
 
 ### ContextBuilder
 
@@ -148,7 +201,7 @@ transform producing up to 6 `Recommendation` kinds, sorted critical → high →
 
 | Kind | Category | Priority | Trigger |
 |---|---|---|---|
-| `RepeatedFailures` | blocking | critical | a `repeated-failures` insight with severity `critical` |
+| `RepeatedFailures` | blocking | critical | a `repeated-failures` insight with severity `critical` (task-type or workflow — see [Repository Failure Policy](#repository-failure-policy); this engine reads the `Insight` shape generically and needed no change for that redesign) |
 | `ReviewChanges` | blocking (if `risky-situation`) or advisory | critical or medium | a `risky-situation` insight, or else a plain unclean-tree insight (mutually exclusive) |
 | `PullRequired` | blocking | high | `branch.behind > 0` |
 | `ReviewPullRequest` | advisory | high | `pullRequests.openCount > 0` |

@@ -20,10 +20,11 @@ import type {
   WorkingTreeChangesResult,
 } from "../git/types";
 import type { RepositorySnapshot } from "../intelligence/types";
-import type { ProjectMemoryEvent } from "../memory/types";
+import type { FailureClearResult, ProjectMemoryEvent, TaskFailureStatus } from "../memory/types";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
 import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
 import type { AutonomousPlanningSnapshot } from "../plan/types";
+import type { TaskType } from "../planner/types";
 import type { AutonomousPlanReadinessReport } from "../planreadiness/types";
 import type { AutonomousPlanSequencingReport } from "../plansequencing/types";
 import type { AutonomousPlanState, LivePlanComparison } from "../planstate/types";
@@ -92,6 +93,18 @@ export interface IApplicationService extends IAutonomousPlanCycleRecorder, IAuto
   // commit log (getCommitHistory below).
   getTaskExecutionHistory(repositoryId?: string, limit?: number): Promise<ProjectMemoryEvent[]>;
   getRepositoryInsights(repositoryId?: string): Promise<RepositoryInsightReport>;
+  // Repository Failure Policy redesign: /failures -- per-task-type
+  // consecutive-failure view, each entry labeled with a precomputed
+  // "blocked"/"warning"/"healthy" status (see this method's own
+  // implementation for the exact thresholds, sourced from DecisionEngine's
+  // exported constants).
+  getFailureStatus(repositoryId?: string): Promise<TaskFailureStatus[]>;
+  // /clear-failures [taskType] -- always succeeds immediately (a derived
+  // counter reset, never a destructive operation): taskType clears just that
+  // one task type, undefined clears every task type for the repository.
+  // Always appends an audit event via ProjectMemoryService -- see
+  // ProjectMemoryOutcome's "failure-state-cleared" kind.
+  clearFailures(repositoryId?: string, taskType?: TaskType): Promise<FailureClearResult>;
   // Phase E: composes ClaudeSessionInfo, the repository's display name, and
   // the same getCurrentTask() every /task query already exposes, plus a
   // derived lifecycleState -- see ApplicationService's own doc comment.

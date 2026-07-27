@@ -19,7 +19,7 @@ import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { RecoveryOutcome } from "../recovery/types";
 import type { UndoOutcome } from "../undo/types";
 import type { RepositorySnapshot } from "../intelligence/types";
-import type { ProjectMemoryEvent } from "../memory/types";
+import type { FailureClearResult, ProjectMemoryEvent, TaskFailureStatus } from "../memory/types";
 import type { PipelineResult, PipelineStepOutcome } from "../pipeline/types";
 import { TASK_CANCELLED_MESSAGE } from "../planner/errors";
 import type { Recommendation, RepositoryRecommendationReport } from "../recommendations/types";
@@ -89,6 +89,9 @@ const SESSION_LIFECYCLE_LABELS: Record<SessionLifecycleState, string> = {
 const HELP_TEXT_LINES: readonly string[] = [
   "/status",
   "/insights",
+  "/failures",
+  "/clear-failures",
+  "/clear-failures &lt;taskType&gt;",
   "/session",
   "/session reset",
   "/session stop",
@@ -813,6 +816,12 @@ export class ResponseFormatter implements IResponseFormatter {
     if (event.outcome.kind === "undo") {
       return `↩️ undo (checkpoint ${this.code(this.shortId(event.outcome.undoneCheckpointId))}) (${timestamp})`;
     }
+    // Repository Failure Policy redesign: /clear-failures' own audit event --
+    // rendered in /task history the same way "undo" already is, since both
+    // are targeted, non-execution writes into the same event log.
+    if (event.outcome.kind === "failure-state-cleared") {
+      return `🧯 failure counters cleared${event.outcome.taskType ? ` (${this.code(event.outcome.taskType)})` : " (all task types)"} (${timestamp})`;
+    }
 
     const { result } = event.outcome;
     if (result.kind === "task") {
@@ -856,6 +865,33 @@ export class ResponseFormatter implements IResponseFormatter {
       case "risky-situation":
         return `${icon} Risky situation: ${this.escapeHtml(insight.contributingKinds.join(", "))}`;
     }
+  }
+
+  // Repository Failure Policy redesign: /failures. `status` on each entry is
+  // precomputed by ApplicationService.getFailureStatus from DecisionEngine's
+  // own threshold constants -- this method has no threshold knowledge of its
+  // own, only three fixed label/icon pairs. Ordered blocked -> warning ->
+  // healthy, then alphabetically by task type within each group (see
+  // ApplicationService.getFailureStatus).
+  formatFailureStatus(states: TaskFailureStatus[]): string {
+    if (states.length === 0) {
+      return "✅ No task types have recorded any executions yet.";
+    }
+
+    const lines = states.map((state) => {
+      const label = state.status === "blocked" ? "🔴 BLOCKED" : state.status === "warning" ? "⚠ WARNING" : "✅ Healthy";
+      return `${label} — ${this.code(state.taskType)}: Consecutive Failures: ${state.consecutiveFailures}`;
+    });
+    return this.template("🧯", "Repository Failure Summary", lines);
+  }
+
+  // /clear-failures [taskType] -- always a plain confirmation, since
+  // ApplicationService.clearFailures always succeeds (a derived counter
+  // reset, never a destructive operation gated on confirmation).
+  formatClearFailuresResult(result: FailureClearResult): string {
+    return result.taskType
+      ? `✅ ${this.escapeHtml(result.taskType)} failure counter cleared.\nRepository is operational again.`
+      : "✅ All repository failure counters cleared.";
   }
 
   // report is exactly what ApplicationService.getSessionStatus() composed --

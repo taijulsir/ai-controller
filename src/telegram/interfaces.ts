@@ -15,7 +15,7 @@ import type {
 import type { ConflictResolutionOutcome } from "../gitengines/types";
 import type { ApprovalGateRequest } from "../gitorchestration/types";
 import type { RepositorySnapshot } from "../intelligence/types";
-import type { ProjectMemoryEvent } from "../memory/types";
+import type { FailureClearResult, ProjectMemoryEvent, TaskFailureStatus } from "../memory/types";
 import type { PipelineResult } from "../pipeline/types";
 import type { RepositoryRecommendationReport } from "../recommendations/types";
 import type { RecoveryOutcome } from "../recovery/types";
@@ -73,6 +73,9 @@ export interface IResponseFormatter {
   // see IApplicationService.getTaskExecutionHistory()'s own doc comment.
   formatTaskHistory(events: ProjectMemoryEvent[]): string;
   formatInsights(report: RepositoryInsightReport): string;
+  // Repository Failure Policy redesign: /failures, /clear-failures.
+  formatFailureStatus(states: TaskFailureStatus[]): string;
+  formatClearFailuresResult(result: FailureClearResult): string;
   // Phase E: report is exactly what ApplicationService.getSessionStatus()
   // composed -- repository name, ClaudeSessionInfo, derived lifecycleState,
   // and the current task, all already decided upstream.

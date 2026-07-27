@@ -1,5 +1,5 @@
 import { DEFAULT_HISTORY_LIMIT, MAX_HISTORY_LIMIT } from "../git/GitConstants";
-import type { Task } from "../planner/types";
+import type { Task, TaskType } from "../planner/types";
 import { CommandParseError } from "./errors";
 import type { ICommandParser } from "./interfaces";
 import type { ApplicationQuery, ParsedCommand } from "./types";
@@ -25,6 +25,41 @@ const QUERY_COMMANDS: ReadonlySet<string> = new Set([
   "recover",
   "resume",
   "abort",
+  // Repository Failure Policy redesign: /failures is a pure read with no
+  // arguments, same shape as "insights"/"status" above -- the generic
+  // dispatch below handles it exactly the same way. ("clear-failures" is
+  // NOT here -- it takes an optional task-type argument the generic
+  // dispatch can't express, so it gets its own block in parse(), the same
+  // "argument shape decides kind/parameters" precedent "discard"/"artifact"
+  // already follow for themselves.)
+  "failures",
+]);
+
+// Repository Failure Policy redesign: the closed set of task types
+// "/clear-failures <taskType>" accepts. Declared locally, not exported --
+// every existing precedent for a Task["type"] subset in this codebase
+// (READ_ONLY_TASK_TYPES in StrategyEngine, BYPASS_TASK_TYPES in
+// ExecutionPipeline, etc.) is a locally-scoped, purpose-built set, never a
+// shared "all task types" export, so this follows the same convention rather
+// than introducing the first one.
+const CLEARABLE_TASK_TYPES: ReadonlySet<TaskType> = new Set([
+  "analyze-repository",
+  "explain-code",
+  "implement-feature",
+  "fix-bug",
+  "verify-git-status",
+  "create-commit",
+  "push-changes",
+  "create-pull-request",
+  "list-pull-requests",
+  "review-code",
+  "switch-branch",
+  "create-branch",
+  "fetch",
+  "sync",
+  "merge",
+  "rebase",
+  "discard",
 ]);
 
 type TaskBuilder = (args: string) => Task;
@@ -315,6 +350,26 @@ export class CommandParser implements ICommandParser {
       );
     }
 
+    // Repository Failure Policy redesign: "/clear-failures" (bare) clears
+    // every task type; "/clear-failures <taskType>" clears just that one.
+    // No "confirm" gate -- see the "clear-failures" ApplicationQuery
+    // variant's own doc comment in types.ts for why. Handled here, before
+    // the generic QUERY_COMMANDS dispatch, the same way "discard"/"artifact"
+    // are above (a command whose own argument shape decides its parameters).
+    if (normalizedCommand === "clear-failures") {
+      const { text, repositoryId: resolvedRepositoryId } = this.extractTrailingRepo(args, repositoryId);
+      const token = text.trim();
+      if (!token) {
+        return { kind: "query", query: { type: "clear-failures" }, repositoryId: resolvedRepositoryId };
+      }
+      if (!CLEARABLE_TASK_TYPES.has(token as TaskType)) {
+        throw new CommandParseError(
+          `"clear-failures" takes a known task type (e.g. "clear-failures sync") or no argument to clear every task type. Send /failures to see current task types.`,
+        );
+      }
+      return { kind: "query", query: { type: "clear-failures", taskType: token as TaskType }, repositoryId: resolvedRepositoryId };
+    }
+
     if (normalizedCommand && QUERY_COMMANDS.has(normalizedCommand)) {
       return { kind: "query", query: this.buildQuery(normalizedCommand, args), repositoryId };
     }
@@ -331,7 +386,9 @@ export class CommandParser implements ICommandParser {
     if (command === "runtime") {
       return this.buildRuntimeQuery(args);
     }
-    return { type: command as "status" | "insights" | "help" | "recommendations" | "branches" | "health" | "recover" | "resume" | "abort" };
+    return {
+      type: command as "status" | "insights" | "help" | "recommendations" | "branches" | "health" | "recover" | "resume" | "abort" | "failures",
+    };
   }
 
   // Git History & Inspection System: "/history" recognizes exactly one of a

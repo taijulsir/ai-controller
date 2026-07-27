@@ -5,6 +5,7 @@ logs/*.log
 memory/*.jsonl
 memory/health.json
 memory/recommendation-state.json
+memory/failure-state.json
 backups/
 .env
 /artifacts/

@@ -1,6 +1,6 @@
 import type { ExecutionRequest } from "../controller/types";
-import type { ExecutionCheckpoint } from "../planner/types";
-import type { ProjectMemoryEvent, ProjectMemoryOutcome } from "./types";
+import type { ExecutionCheckpoint, TaskType } from "../planner/types";
+import type { ProjectMemoryEvent, ProjectMemoryOutcome, TaskFailureState } from "./types";
 
 // Phase 13: the narrow, read-only view of IProjectMemoryService's history
 // query, carved out specifically for AutonomousExecutionWorker
@@ -39,7 +39,30 @@ export interface IUndoRecorder {
   recordUndo(repositoryId: string, undoneCheckpointId: string): Promise<void>;
 }
 
+// Repository Failure Policy redesign: the one new derived-state store this
+// redesign adds, carved into its own narrow read interface the same way
+// IRecentExecutionHistoryProvider/IUndoableExecutionHistoryProvider are
+// above -- DecisionEngine only ever needs read access to failure state.
+export interface IFailureStateReader {
+  getFailureState(repositoryId: string, taskType: TaskType): Promise<TaskFailureState | undefined>;
+  getAllFailureStates(repositoryId: string): Promise<TaskFailureState[]>;
+}
+
+// Repository Failure Policy redesign: the write side. recordTaskOutcome is
+// called by ProjectMemoryService.record() itself, as a side effect of every
+// recorded task outcome -- never called directly by any other caller.
+// clearFailureState/clearAllFailureStates back the /clear-failures Telegram
+// command (ApplicationService). Both clear* methods append a
+// "failure-state-cleared" ProjectMemoryEvent (see that outcome kind's own
+// doc comment) so clearing is auditable the same way every other write in
+// this file already is -- never a silent reset.
+export interface IFailureStateStore extends IFailureStateReader {
+  recordTaskOutcome(repositoryId: string, taskType: TaskType, outcome: "success" | "failure"): Promise<TaskFailureState>;
+  clearFailureState(repositoryId: string, taskType: TaskType): Promise<void>;
+  clearAllFailureStates(repositoryId: string): Promise<void>;
+}
+
 export interface IProjectMemoryService
-  extends IRecentExecutionHistoryProvider, IUndoableExecutionHistoryProvider, IUndoRecorder {
+  extends IRecentExecutionHistoryProvider, IUndoableExecutionHistoryProvider, IUndoRecorder, IFailureStateStore {
   record(request: ExecutionRequest, outcome: ProjectMemoryOutcome): Promise<void>;
 }

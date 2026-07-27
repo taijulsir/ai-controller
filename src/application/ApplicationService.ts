@@ -13,6 +13,7 @@ import type { RepositoryAssistanceReport } from "../assistance/types";
 import type { IAutonomousPlanningEngine } from "../autonomy/interfaces";
 import type { AutonomousPlan } from "../autonomy/types";
 import type { IRuntimeControlService } from "../control/interfaces";
+import { CONSECUTIVE_FAILURE_WARNING_THRESHOLD } from "../decisions/DecisionEngine";
 import type { IDecisionEngine } from "../decisions/interfaces";
 import type { RepositoryInsightReport } from "../decisions/types";
 import type { IRuntimeDiagnosticsEngine } from "../diagnostics/interfaces";
@@ -40,7 +41,7 @@ import type { IRepositoryIntelligenceService } from "../intelligence/interfaces"
 import type { RepositorySnapshot } from "../intelligence/types";
 import type { JournalRollbackStrategy } from "../journal/types";
 import type { IProjectMemoryService } from "../memory/interfaces";
-import type { ProjectMemoryEvent } from "../memory/types";
+import type { FailureClearResult, ProjectMemoryEvent, TaskFailureStatus } from "../memory/types";
 import type { IProactiveMonitor } from "../monitoring/interfaces";
 import type { AutonomousPlanEvolutionReport, AutonomousPlanHistoryEntry } from "../planhistory/types";
 import type { AutonomousPlanAnalysisReport } from "../plananalysis/types";
@@ -285,6 +286,42 @@ export class ApplicationService implements IApplicationService {
     const resolvedId = this.resolveRepositoryId(repositoryId);
     const snapshot = await this.repositoryIntelligence.getSnapshot(resolvedId);
     return this.decisionEngine.analyze(snapshot);
+  }
+
+  // Repository Failure Policy redesign: /failures. Direct pass-through to
+  // ProjectMemoryService's persisted per-task-type state, with one derived
+  // field (`status`) attached here -- the single place that reads
+  // DecisionEngine's exported threshold constants, so ResponseFormatter
+  // never needs its own copy of the numbers. Ordered blocked -> warning ->
+  // healthy, then alphabetically by task type within each group, so the
+  // rendered list is stable and puts what needs attention first.
+  async getFailureStatus(repositoryId?: string): Promise<TaskFailureStatus[]> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    const states = await this.projectMemory.getAllFailureStates(resolvedId);
+    const statusRank = { blocked: 0, warning: 1, healthy: 2 } as const;
+
+    return states
+      .map((state) => ({
+        ...state,
+        status: state.blocked ? ("blocked" as const) : state.consecutiveFailures >= CONSECUTIVE_FAILURE_WARNING_THRESHOLD ? ("warning" as const) : ("healthy" as const),
+      }))
+      .sort((a, b) => statusRank[a.status] - statusRank[b.status] || a.taskType.localeCompare(b.taskType));
+  }
+
+  // /clear-failures [taskType] -- always executes immediately, never gated
+  // behind a "confirm" the way /discard <index>/artifact delete-all are:
+  // clearing a derived counter destroys nothing irreversible (the underlying
+  // ProjectMemoryEvent history is untouched, per clearFailureState/
+  // clearAllFailureStates's own doc comments) and this already self-heals on
+  // the next success regardless.
+  async clearFailures(repositoryId?: string, taskType?: TaskType): Promise<FailureClearResult> {
+    const resolvedId = this.resolveRepositoryId(repositoryId);
+    if (taskType) {
+      await this.projectMemory.clearFailureState(resolvedId, taskType);
+    } else {
+      await this.projectMemory.clearAllFailureStates(resolvedId);
+    }
+    return { repositoryId: resolvedId, taskType };
   }
 
   // Composes three independently-owned facts, none re-derived or

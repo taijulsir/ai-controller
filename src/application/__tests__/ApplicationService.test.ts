@@ -1,8 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { IConfigService } from "../../config/interfaces";
+import type { ControllerConfig } from "../../config/types";
+import type { ExecutionResult } from "../../controller/types";
 import type { Repository } from "../../domain/repository/Repository";
 import type { DiscardOutcome, DiscardPlan, GitHistoryFilter, GitHistoryResult } from "../../git/types";
 import type { IGitHistoryService, IWorkingTreeService } from "../../git/interfaces";
 import { JournalOperationType } from "../../journal/types";
+import type { IProjectMemoryService } from "../../memory/interfaces";
+import { ProjectMemoryService } from "../../memory/ProjectMemoryService";
 import type { IRepositoryRegistry } from "../../repositories/interfaces";
 import type { ISafeUndoFramework, IUndoService } from "../../undo/interfaces";
 import type { GitUndoPlan, UndoPlan } from "../../undo/types";
@@ -16,6 +24,7 @@ import { ApplicationService } from "../ApplicationService";
 // TypeError, not silently.
 function buildApplicationService(deps: {
   repositoryRegistry: IRepositoryRegistry;
+  projectMemory?: IProjectMemoryService;
   undoService?: IUndoService;
   safeUndoFramework?: ISafeUndoFramework;
   gitHistoryService?: IGitHistoryService;
@@ -24,7 +33,7 @@ function buildApplicationService(deps: {
   const unused = undefined as never;
   return new ApplicationService(
     unused,
-    unused,
+    deps.projectMemory ?? unused,
     unused,
     unused,
     deps.repositoryRegistry,
@@ -433,5 +442,106 @@ describe("ApplicationService discard confirmation flow", () => {
 
     expect(await service.discardAllWorkingTreeChanges(undefined, true)).toEqual(discardOutcome());
     expect(executed.called).toBe(true);
+  });
+});
+
+// Repository Failure Policy redesign: getFailureStatus/clearFailures are
+// thin, direct pass-throughs to ProjectMemoryService's own IFailureStateStore
+// -- exercised here against the real ProjectMemoryService (fs-backed, tmp
+// directory) rather than a fake, since the behavior worth verifying (status
+// labeling, and requirement #4's "automatic recovery... available
+// immediately, no manual step") only exists once real consecutive counting
+// is involved.
+describe("ApplicationService.getFailureStatus / clearFailures", () => {
+  function fakeConfigService(directory: string): IConfigService {
+    const controllerConfig = { memory: { enabled: true, directory } } as ControllerConfig;
+    return {
+      getControllerConfig: () => controllerConfig,
+      getClaudeConfig: () => undefined as never,
+      getGithubConfig: () => undefined as never,
+      getTelegramConfig: () => undefined as never,
+      getRepositories: () => [],
+      reload: () => {},
+    };
+  }
+
+  function failureResult(taskType: string): ExecutionResult {
+    return {
+      kind: "task",
+      taskResult: { taskType, success: false, error: "boom", correlationId: "corr-1" } as never,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      durationMs: 1,
+    };
+  }
+
+  function successResult(taskType: string): ExecutionResult {
+    return {
+      kind: "task",
+      taskResult: { taskType, success: true, correlationId: "corr-1" } as never,
+      startedAt: new Date(),
+      completedAt: new Date(),
+      durationMs: 1,
+    };
+  }
+
+  let directory: string;
+  let projectMemory: IProjectMemoryService;
+  let service: ApplicationService;
+
+  beforeEach(async () => {
+    directory = await mkdtemp(path.join(tmpdir(), "app-service-failures-"));
+    projectMemory = new ProjectMemoryService(fakeRegistry(), fakeConfigService(directory));
+    service = buildApplicationService({ repositoryRegistry: fakeRegistry(), projectMemory });
+  });
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true, force: true });
+  });
+
+  it("labels a task type 'blocked' once it reaches 5 consecutive failures", async () => {
+    for (let i = 0; i < 5; i++) {
+      await projectMemory.record({ kind: "task", task: { type: "sync" } as never, repositoryId: "repo-1" }, { kind: "result", result: failureResult("sync") });
+    }
+    const statuses = await service.getFailureStatus("repo-1");
+    const sync = statuses.find((s) => s.taskType === "sync");
+    expect(sync?.status).toBe("blocked");
+    expect(sync?.consecutiveFailures).toBe(5);
+  });
+
+  it("recovers automatically -- a single success after 5 failures unblocks the task type immediately, no manual step", async () => {
+    for (let i = 0; i < 5; i++) {
+      await projectMemory.record({ kind: "task", task: { type: "push-changes" } as never, repositoryId: "repo-1" }, { kind: "result", result: failureResult("push-changes") });
+    }
+    expect((await service.getFailureStatus("repo-1")).find((s) => s.taskType === "push-changes")?.status).toBe("blocked");
+
+    await projectMemory.record({ kind: "task", task: { type: "push-changes" } as never, repositoryId: "repo-1" }, { kind: "result", result: successResult("push-changes") });
+
+    const statuses = await service.getFailureStatus("repo-1");
+    const pushChanges = statuses.find((s) => s.taskType === "push-changes");
+    expect(pushChanges?.status).toBe("healthy");
+    expect(pushChanges?.consecutiveFailures).toBe(0);
+  });
+
+  it("clearFailures(taskType) clears just that task type via clearFailureState", async () => {
+    await projectMemory.record({ kind: "task", task: { type: "sync" } as never, repositoryId: "repo-1" }, { kind: "result", result: failureResult("sync") });
+    await projectMemory.record({ kind: "task", task: { type: "fetch" } as never, repositoryId: "repo-1" }, { kind: "result", result: failureResult("fetch") });
+
+    const result = await service.clearFailures("repo-1", "sync" as never);
+    expect(result).toEqual({ repositoryId: "repo-1", taskType: "sync" });
+
+    const statuses = await service.getFailureStatus("repo-1");
+    expect(statuses.find((s) => s.taskType === "sync")).toBeUndefined();
+    expect(statuses.find((s) => s.taskType === "fetch")?.consecutiveFailures).toBe(1);
+  });
+
+  it("clearFailures() with no taskType clears every task type via clearAllFailureStates", async () => {
+    await projectMemory.record({ kind: "task", task: { type: "sync" } as never, repositoryId: "repo-1" }, { kind: "result", result: failureResult("sync") });
+    await projectMemory.record({ kind: "task", task: { type: "fetch" } as never, repositoryId: "repo-1" }, { kind: "result", result: failureResult("fetch") });
+
+    const result = await service.clearFailures("repo-1");
+    expect(result).toEqual({ repositoryId: "repo-1", taskType: undefined });
+
+    expect(await service.getFailureStatus("repo-1")).toHaveLength(0);
   });
 });

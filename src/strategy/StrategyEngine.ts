@@ -21,14 +21,14 @@ import type {
 // The same five task types resolveRecommendedAction's own switch below
 // routes to "AnalyzeFirst" — read-only inspection, never git state or Claude
 // writing code (mirrors ExecutionPipeline's "five safe, read-only task
-// types" VerifyRepository dispatches verbatim). A critical insight (e.g. a
-// risky-situation combination) must never block these: that insight is
-// precisely the thing a user runs /review, /analyze, or /explain to
-// understand, and blocking them would withhold the information needed to
+// types" VerifyRepository dispatches verbatim). A blocking repeated-failures
+// insight (see buildExecutionReadiness below) must never block these: that
+// insight is precisely the thing a user runs /review, /analyze, or /explain
+// to understand, and blocking them would withhold the information needed to
 // resolve it. Every mutating or session-continuing task type
 // (implement-feature, fix-bug, create-commit, push-changes,
 // create-pull-request) is deliberately absent from this set, so it keeps
-// exactly the critical-insight readiness gate it already had.
+// exactly the task-type-scoped readiness gate it already had.
 const READ_ONLY_TASK_TYPES: ReadonlySet<Task["type"]> = new Set([
   "analyze-repository",
   "explain-code",
@@ -130,6 +130,18 @@ export class StrategyEngine implements IExecutionStrategyEngine {
     return { expected: false };
   }
 
+  // Repository Failure Policy redesign: the blocking condition below is
+  // deliberately narrow -- a critical insight only blocks a task when it is
+  // BOTH a "repeated-failures" insight AND scoped to the exact task type
+  // being requested (insight.taskType === task.type). This replaces the
+  // previous "any critical insight blocks every write task" rule, which let
+  // an unrelated repeated failure (e.g. sync) or a critical risky-situation
+  // meta-insight block completely unrelated work (e.g. implement-feature).
+  // A workflow-keyed repeated-failures insight (taskType undefined) can
+  // never match this condition, so it stays informational-only, same as
+  // risky-situation and every other insight kind -- both still surface via
+  // buildSafetyRecommendations/buildExecutionPriority below, they simply
+  // never gate readiness on their own anymore.
   private buildExecutionReadiness(task: Task, snapshot: RepositorySnapshot, insights: Insight[]): ExecutionReadiness {
     const blockers: string[] = [];
 
@@ -143,7 +155,7 @@ export class StrategyEngine implements IExecutionStrategyEngine {
 
     if (!READ_ONLY_TASK_TYPES.has(task.type)) {
       for (const insight of insights) {
-        if (insight.severity === "critical") {
+        if (insight.kind === "repeated-failures" && insight.severity === "critical" && insight.taskType === task.type) {
           blockers.push(this.describeInsight(insight));
         }
       }
@@ -195,7 +207,9 @@ export class StrategyEngine implements IExecutionStrategyEngine {
     }
   }
 
-  // Priority order: an unready repository or an active critical insight
+  // Priority order: an unready repository -- not a valid git repo, an
+  // unresolved push/PR blocker, or (Repository Failure Policy redesign) a
+  // critical repeated-failures insight scoped to this exact task type --
   // always wins (ReviewRepository), then a pending approval requirement
   // (WaitForApproval) — both override whatever the requested task literally
   // is, since neither can proceed as asked right now. Below that, the

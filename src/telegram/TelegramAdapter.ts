@@ -297,6 +297,12 @@ export class TelegramAdapter implements ITelegramAdapter, ITelegramCallbackHandl
         return this.responseFormatter.formatCommitDiff(await this.applicationService.getCommitDiffStat(repositoryId, query.hash));
       case "insights":
         return this.responseFormatter.formatInsights(await this.applicationService.getRepositoryInsights(repositoryId));
+      case "failures":
+        return this.responseFormatter.formatFailureStatus(await this.applicationService.getFailureStatus(repositoryId));
+      case "clear-failures":
+        return this.responseFormatter.formatClearFailuresResult(
+          await this.applicationService.clearFailures(repositoryId, query.taskType),
+        );
       case "session":
         return this.responseFormatter.formatSessionStatus(this.applicationService.getSessionStatus(repositoryId));
       case "session-reset":
