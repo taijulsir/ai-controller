@@ -39,6 +39,7 @@ function commitDetail(): CommitDetail {
     authorDate: new Date(),
     parents: [],
     subject: "feat: redesign orchestration",
+    body: "feat: redesign orchestration",
     isHead: true,
     currentBranch: "main",
     files: [],

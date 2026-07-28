@@ -251,6 +251,22 @@ export class GitAdapter implements IGitAdapter {
     }
   }
 
+  async upstreamSha(): Promise<string | undefined> {
+    try {
+      return await this.run(GitCommand.upstreamSha());
+    } catch {
+      return undefined;
+    }
+  }
+
+  async remoteUrl(remote: string): Promise<string | undefined> {
+    try {
+      return await this.run(GitCommand.remoteUrl(remote));
+    } catch {
+      return undefined;
+    }
+  }
+
   async stashCount(): Promise<number> {
     const output = await this.run(GitCommand.stashList());
     return output.length === 0 ? 0 : output.split("\n").filter((line) => line.trim().length > 0).length;

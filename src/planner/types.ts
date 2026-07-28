@@ -1,4 +1,5 @@
 import type { ArtifactMetadata } from "../artifacts";
+import type { CommitCreationResult, PushResult } from "../git/types";
 
 export type TaskType =
   | "analyze-repository"
@@ -134,6 +135,15 @@ export interface TaskExecutionContext {
 export interface WorkflowResult {
   success: boolean;
   output?: string;
+  // Commit and Push Result Messages: populated only by CreateCommitWorkflow/
+  // PushChangesWorkflow on a successful run, undefined for every other task
+  // type -- same "purely additive, only its own producer ever sets it"
+  // shape TaskResult's own checkpoint/artifacts fields already use, not a
+  // replacement for `output` above (which WorkflowOrchestrator's
+  // "{{steps.stepId.output}}" placeholder substitution still reads as plain
+  // text for every task type, this one included).
+  commitCreated?: CommitCreationResult;
+  pushCompleted?: PushResult;
 }
 
 // Phase B (Undo): produced only for task types ITaskCancellationPolicy's

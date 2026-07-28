@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
+import type { ExecutionResult } from "../../controller/types";
 import type {
+  CommitCreationResult,
   CommitDetail,
   CommitDiffStatResult,
   CommitSummary,
   DiscardOutcome,
   DiscardPlan,
   GitHistoryResult,
+  PushResult,
   WorkingTreeChange,
   WorkingTreeChangeDiff,
   WorkingTreeChangesResult,
@@ -13,6 +16,7 @@ import type {
 import type { RepositorySnapshot } from "../../intelligence/types";
 import { JournalOperationType } from "../../journal/types";
 import type { PipelineContext, PipelineResult } from "../../pipeline/types";
+import type { TaskResult } from "../../planner/types";
 import type { TaskExecutionStrategy } from "../../strategy/types";
 import { ResponseFormatter } from "../ResponseFormatter";
 
@@ -117,6 +121,7 @@ describe("ResponseFormatter: Git History & Inspection System", () => {
         authorDate: new Date("2026-07-25T12:00:00Z"),
         parents: ["97761a5"],
         subject: "feat(git): redesign orchestration",
+        body: "feat(git): redesign orchestration",
         isHead: false,
         currentBranch: undefined,
         files: [
@@ -628,5 +633,185 @@ describe("ResponseFormatter: Branch Blocking Observability", () => {
     const text = formatter.formatRepositoryStatus(repositorySnapshot({ current: "production_2026_mall", default: "production_2026_mall" }));
     expect(text).toContain("Protected branch");
     expect(text).not.toContain("Safe for implementation");
+  });
+});
+
+function commitCreationResult(overrides: Partial<CommitCreationResult> = {}): CommitCreationResult {
+  return {
+    branch: "main",
+    sha: "6739c2e44833dbed637f3d9702fb03c378a7f2f2",
+    shortSha: "6739c2e",
+    message: "feat: add feature",
+    files: [{ path: "src/feature.ts", status: "added" }],
+    filesChanged: 1,
+    insertions: 10,
+    deletions: 0,
+    timestamp: new Date("2026-07-28T06:00:00Z"),
+    ...overrides,
+  };
+}
+
+function pushCommit(overrides: Partial<CommitSummary> = {}): CommitSummary {
+  return { sha: "a1b2c3d4e5f6789012345678901234567890abcd", shortSha: "a1b2c3d", message: "Fix payment retry", author: "Alice", date: new Date("2026-07-28T06:00:00Z"), ...overrides };
+}
+
+function pushResult(overrides: Partial<PushResult> = {}): PushResult {
+  return {
+    branch: "main",
+    remote: "origin",
+    headSha: "a1b2c3d4e5f6789012345678901234567890abcd",
+    headShortSha: "a1b2c3d",
+    headMessage: "Fix payment retry",
+    pushedCommits: [pushCommit()],
+    ahead: 0,
+    behind: 0,
+    githubUrl: undefined,
+    timestamp: new Date("2026-07-28T06:00:00Z"),
+    ...overrides,
+  };
+}
+
+function taskExecutionResult(taskResult: Partial<TaskResult> & { taskType: TaskResult["taskType"]; success: boolean }): ExecutionResult {
+  return {
+    kind: "task",
+    taskResult: { correlationId: "corr-1", ...taskResult } as TaskResult,
+    startedAt: new Date(),
+    completedAt: new Date(),
+    durationMs: 1,
+  };
+}
+
+// Regression coverage for Commit and Push Result Messages: /create-commit
+// and /push-changes used to render as a bare "✅ Task Completed / Task:
+// create-commit" with no way to verify the operation from Telegram alone.
+describe("ResponseFormatter: Commit and Push Result Messages", () => {
+  const formatter = new ResponseFormatter();
+
+  describe("create-commit", () => {
+    it("renders repository, branch, hash, full message, files, and stats for a single-file commit", () => {
+      const text = formatter.format(
+        taskExecutionResult({ taskType: "create-commit", success: true, repositoryId: "repo-1", commitCreated: commitCreationResult() }),
+      );
+
+      expect(text).toContain("Commit Created");
+      expect(text).toContain("repo-1");
+      expect(text).toContain("main");
+      expect(text).toContain("6739c2e");
+      expect(text).toContain("feat: add feature");
+      expect(text).toContain("src/feature.ts");
+      expect(text).toMatch(/1 file\(s\) changed, \+10 insertions, -0 deletions/);
+    });
+
+    it("renders every file for a multi-file commit", () => {
+      const result = commitCreationResult({
+        filesChanged: 3,
+        insertions: 25,
+        deletions: 4,
+        files: [
+          { path: "src/a.ts", status: "modified" },
+          { path: "src/b.ts", status: "added" },
+          { path: "src/old.ts", status: "deleted" },
+        ],
+      });
+      const text = formatter.format(taskExecutionResult({ taskType: "create-commit", success: true, repositoryId: "repo-1", commitCreated: result }));
+
+      expect(text).toContain("src/a.ts");
+      expect(text).toContain("src/b.ts");
+      expect(text).toContain("src/old.ts");
+      expect(text).toMatch(/3 file\(s\) changed, \+25 insertions, -4 deletions/);
+    });
+
+    it("preserves and escapes a multi-line commit message", () => {
+      const result = commitCreationResult({ message: "feat: add <feature>\n\nBody line with & an ampersand." });
+      const text = formatter.format(taskExecutionResult({ taskType: "create-commit", success: true, repositoryId: "repo-1", commitCreated: result }));
+
+      expect(text).toContain("feat: add &lt;feature&gt;");
+      expect(text).toContain("&amp;");
+      expect(text).not.toContain("<feature>");
+    });
+
+    it("shows a UTC timestamp", () => {
+      const text = formatter.format(
+        taskExecutionResult({ taskType: "create-commit", success: true, repositoryId: "repo-1", commitCreated: commitCreationResult() }),
+      );
+      expect(text).toMatch(/2026-07-28 06:00:00 UTC/);
+    });
+  });
+
+  describe("push-changes", () => {
+    it("renders repository, remote, branch, hash, message, and remote status for a single-commit push", () => {
+      const text = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: pushResult() }));
+
+      expect(text).toContain("Push Successful");
+      expect(text).toContain("repo-1");
+      expect(text).toContain("origin");
+      expect(text).toContain("main");
+      expect(text).toContain("a1b2c3d");
+      expect(text).toContain("Fix payment retry");
+      expect(text).toContain("origin/main");
+      expect(text).toMatch(/ahead 0, behind 0/);
+    });
+
+    it("lists every pushed commit for a multi-commit push", () => {
+      const result = pushResult({
+        pushedCommits: [
+          pushCommit({ shortSha: "a1b2c3d", message: "Fix payment retry" }),
+          pushCommit({ shortSha: "d4e5f6g", message: "Improve logging" }),
+        ],
+      });
+      const text = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: result }));
+
+      expect(text).toContain("Pushed Commits");
+      expect(text).toContain("a1b2c3d");
+      expect(text).toContain("Fix payment retry");
+      expect(text).toContain("d4e5f6g");
+      expect(text).toContain("Improve logging");
+    });
+
+    it("truncates a very large pushed-commit list instead of dumping every entry", () => {
+      const commits = Array.from({ length: 25 }, (_, i) => pushCommit({ shortSha: `sha${i}`, message: `commit ${i}` }));
+      const result = pushResult({ pushedCommits: commits });
+      const text = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: result }));
+
+      expect(text).toContain("sha0");
+      expect(text).toContain("sha9");
+      expect(text).not.toContain("sha10");
+      expect(text).toMatch(/\.\.\.and 15 more/);
+    });
+
+    it("reports a no-op push as '0 (already up to date)' rather than an error", () => {
+      const result = pushResult({ pushedCommits: [] });
+      const text = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: result }));
+
+      expect(text).toContain("Push Successful");
+      expect(text).toMatch(/already up to date/i);
+    });
+
+    it("omits the GitHub field when no URL is available", () => {
+      const text = formatter.format(
+        taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: pushResult({ githubUrl: undefined }) }),
+      );
+      expect(text).not.toContain("GitHub");
+    });
+
+    it("shows a plain, unescaped GitHub URL when available", () => {
+      const result = pushResult({ githubUrl: "https://github.com/taijulsir/ai-controller/tree/main" });
+      const text = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: result }));
+      expect(text).toContain("https://github.com/taijulsir/ai-controller/tree/main");
+      expect(text).not.toContain("<a href");
+    });
+
+    it("shows a UTC timestamp", () => {
+      const text = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1", pushCompleted: pushResult() }));
+      expect(text).toMatch(/2026-07-28 06:00:00 UTC/);
+    });
+  });
+
+  it("falls back to a minimal Task Completed shape if commitCreated/pushCompleted is somehow absent", () => {
+    const commitText = formatter.format(taskExecutionResult({ taskType: "create-commit", success: true, repositoryId: "repo-1" }));
+    expect(commitText).toContain("Commit Created");
+
+    const pushText = formatter.format(taskExecutionResult({ taskType: "push-changes", success: true, repositoryId: "repo-1" }));
+    expect(pushText).toContain("Push Successful");
   });
 });

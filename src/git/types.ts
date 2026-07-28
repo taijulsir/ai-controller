@@ -164,6 +164,12 @@ export interface CommitMetadata {
   // Short hashes, root commits have zero.
   parents: string[];
   subject: string;
+  // Full raw message (git's %B) -- the subject line plus any body
+  // paragraphs, unlike `subject` above which is the first line only. Added
+  // for Commit and Push Result Messages (push-changes has no in-memory copy
+  // of a commit's message the way CreateCommitWorkflow does for its own
+  // input, so it reads this back from git instead).
+  body: string;
 }
 
 // One file's insertion/deletion counts within a single commit (git diff-tree
@@ -225,6 +231,51 @@ export interface CommitDiffStatResult {
   filesChanged: number;
   insertions: number;
   deletions: number;
+}
+
+// ---------------------------------------------------------------------------
+// Commit and Push Result Messages: composed once, by CreateCommitWorkflow/
+// PushChangesWorkflow themselves, right after a successful commit/push --
+// same "compose a ready-to-format result, not a plain string" shape
+// CommitDetail above already established for /show, so ResponseFormatter
+// never has to re-derive any of this and a user can verify the operation
+// entirely from Telegram without opening GitHub or SSHing into the server.
+// ---------------------------------------------------------------------------
+
+// create-commit's own result. `message` is the exact string the task was
+// given to commit with -- passed straight through rather than re-read via
+// git log, since CreateCommitWorkflow already has it in hand.
+export interface CommitCreationResult {
+  branch: string;
+  sha: string;
+  shortSha: string;
+  message: string;
+  files: GitFileChange[];
+  filesChanged: number;
+  insertions: number;
+  deletions: number;
+  timestamp: Date;
+}
+
+// push-changes's own result. pushedCommits is every commit newly published
+// by this push (see PushChangesWorkflow.buildPushResult's own doc comment
+// for how the range is resolved, and its one documented limitation for a
+// branch's very first push). Empty for a no-op push ("Everything
+// up-to-date") -- a normal, successful outcome, not an error.
+export interface PushResult {
+  branch: string;
+  remote: string;
+  headSha: string;
+  headShortSha: string;
+  headMessage: string;
+  pushedCommits: CommitSummary[];
+  ahead: number;
+  behind: number;
+  // undefined when the remote isn't a recognized github.com URL, or has no
+  // remote configured at all -- never a precondition for reporting the push
+  // itself as successful.
+  githubUrl: string | undefined;
+  timestamp: Date;
 }
 
 // ---------------------------------------------------------------------------

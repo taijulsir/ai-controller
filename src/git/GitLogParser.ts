@@ -24,7 +24,7 @@ export function parseGitLog(logOutput: string): CommitSummary[] {
 // line of output (see GitConstants.ts) -- always exactly one record, no
 // RECORD_SEPARATOR involved, unlike parseGitLog above.
 export function parseCommitMetadata(output: string): CommitMetadata {
-  const [sha, shortSha, authorName, authorEmail, authorDate, parents, subject] = output.trim().split(FIELD_SEPARATOR);
+  const [sha, shortSha, authorName, authorEmail, authorDate, parents, subject, body] = output.trim().split(FIELD_SEPARATOR);
   return {
     sha,
     shortSha,
@@ -33,6 +33,7 @@ export function parseCommitMetadata(output: string): CommitMetadata {
     authorDate: new Date(authorDate),
     parents: parents.length > 0 ? parents.split(" ") : [],
     subject,
+    body,
   };
 }
 

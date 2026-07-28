@@ -18,8 +18,13 @@ const RECENT_COMMITS_FORMAT = "%H\x1f%h\x1f%an\x1f%aI\x1f%s\x1e";
 // abbreviated parent hashes (%p) to RECENT_COMMITS_FORMAT's fields -- neither
 // is needed by the multi-commit list view above, so this stays a distinct
 // format rather than widening that one for every entry of a list. Always
-// exactly one record (git log -1), so no trailing \x1e is needed.
-const SHOW_COMMIT_FORMAT = "%H\x1f%h\x1f%an\x1f%ae\x1f%aI\x1f%p\x1f%s";
+// exactly one record (git log -1), so no trailing \x1e is needed. %B (full
+// raw message, added for Commit and Push Result Messages) is always last:
+// unlike every other field here, it may itself contain literal newlines, but
+// since this format is only ever used for a single commit at a time, there's
+// no following field or record separator those embedded newlines could be
+// mistaken for.
+const SHOW_COMMIT_FORMAT = "%H\x1f%h\x1f%an\x1f%ae\x1f%aI\x1f%p\x1f%s\x1f%B";
 
 export const GitCommand = {
   status: (): string[] => ["status", "--porcelain=v2", "--branch"],
@@ -108,6 +113,19 @@ export const GitCommand = {
   gitDir: (): string[] => ["rev-parse", "--git-dir"],
   hasUpstreamConfigured: (branch: string): string[] => ["config", "--get", `branch.${branch}.merge`],
   upstreamRef: (): string[] => ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
+  // Commit and Push Result Messages (push-changes): the upstream's own tip
+  // SHA, resolved *before* push() runs (push moves the local remote-tracking
+  // ref forward) -- the range between this and the new HEAD is exactly what
+  // a push newly published. Distinct from upstreamRef() above, which
+  // resolves to a ref *name* ("origin/main"), not a commit -- fails the same
+  // way (no upstream configured, or configured but unresolvable) when none
+  // exists yet, e.g. a branch's very first push.
+  upstreamSha: (): string[] => ["rev-parse", "@{upstream}"],
+  // Commit and Push Result Messages: resolves to a GitHub web URL only when
+  // this remote happens to be one (see src/github/GithubUrl.ts) -- never
+  // shells out to `gh`, so a push/commit summary never depends on GitHub CLI
+  // auth just to show a "nice to have" link.
+  remoteUrl: (remote: string): string[] => ["remote", "get-url", remote],
   stashList: (): string[] => ["stash", "list"],
   worktreeList: (): string[] => ["worktree", "list", "--porcelain"],
   submoduleStatus: (): string[] => ["submodule", "status"],

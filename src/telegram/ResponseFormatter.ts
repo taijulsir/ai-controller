@@ -3,6 +3,7 @@ import type { ExecutionResult, OrchestrationResult } from "../controller/types";
 import type { Insight, RepositoryInsightReport } from "../decisions/types";
 import type { CurrentTaskReport, TaskCancellationOutcome } from "../executionstate/types";
 import type {
+  CommitCreationResult,
   CommitDetail,
   CommitDiffStatResult,
   CommitSummary,
@@ -10,6 +11,7 @@ import type {
   DiscardPlan,
   GitFileChange,
   GitHistoryResult,
+  PushResult,
   RepositoryHealthReport,
   WorkingTreeChange,
   WorkingTreeChangeDiff,
@@ -39,6 +41,13 @@ import { escapeHtml } from "./TelegramHtml";
 // item-based since a diff's own line structure (hunks, +/- prefixes) has to
 // stay intact for it to remain readable.
 const MAX_DIFF_DISPLAY_LINES = 200;
+
+// Commit and Push Result Messages (push-changes): how many individually
+// listed commits a "✅ Push Successful" reply shows before collapsing the
+// rest into "...and N more" -- same truncateBulletList-style cap as every
+// other list in this file, keeping a large push's summary compact and
+// mobile-readable rather than dumping every commit message into one message.
+const MAX_PUSHED_COMMITS_SHOWN = 10;
 
 // Section titles as produced by RuntimeReportingEngine (Phase 8.9) — used
 // only to select which already-built sections to include per runtime query
@@ -208,6 +217,23 @@ export class ResponseFormatter implements IResponseFormatter {
     }
     if (taskResult.taskType === "merge") {
       return this.template("🔀", "Merged", taskResult.output ? [this.escapeHtml(taskResult.output)] : []);
+    }
+
+    // Commit and Push Result Messages: CreateCommitWorkflow/PushChangesWorkflow
+    // populate these two structured fields (see WorkflowResult's own doc
+    // comment) only on success -- the `undefined` fallback below only fires
+    // if a caller somehow produced a successful create-commit/push-changes
+    // TaskResult without going through those workflows (e.g. a future test
+    // double), never in real operation.
+    if (taskResult.taskType === "create-commit") {
+      return taskResult.commitCreated
+        ? this.formatCommitCreated(taskResult.repositoryId, taskResult.commitCreated)
+        : this.template("✅", "Commit Created", [this.field("Task", this.code(taskResult.taskType))]);
+    }
+    if (taskResult.taskType === "push-changes") {
+      return taskResult.pushCompleted
+        ? this.formatPushCompleted(taskResult.repositoryId, taskResult.pushCompleted)
+        : this.template("✅", "Push Successful", [this.field("Task", this.code(taskResult.taskType))]);
     }
 
     const lines = [this.field("Task", this.code(taskResult.taskType))];
@@ -536,6 +562,80 @@ export class ResponseFormatter implements IResponseFormatter {
       case "deleted":
         return "Deleted";
     }
+  }
+
+  // Commit and Push Result Messages (create-commit): everything needed to
+  // verify a commit from Telegram alone -- repository, branch, hash, the
+  // full commit message, the changed-file list, and aggregate stats, in the
+  // same compact "Label: value" style every other command in this file
+  // already uses (not the requesting spec's own vertical label-then-value
+  // layout -- that reads fine on a form, but roughly doubles the line count
+  // for no added information, working against "keep messages compact" on a
+  // phone screen).
+  private formatCommitCreated(repositoryId: string | undefined, result: CommitCreationResult): string {
+    const lines = [
+      this.field("Repository", this.code(repositoryId ?? "unknown")),
+      this.field("Branch", this.code(result.branch)),
+      this.field("Commit Hash", this.code(result.shortSha)),
+      "",
+      this.escapeHtml(result.message),
+      "",
+      `Files Changed (${result.filesChanged}):`,
+      ...this.truncateBulletList(result.files.map((file) => `${this.humanizeFileStatus(file.status)}: ${this.code(file.path)}`), 20),
+      "",
+      `${result.filesChanged} file(s) changed, +${result.insertions} insertions, -${result.deletions} deletions`,
+      "",
+      this.field("Timestamp", this.formatAbsoluteTimestamp(result.timestamp)),
+    ];
+    return this.template("✅", "Commit Created", lines);
+  }
+
+  // Commit and Push Result Messages (push-changes). No GitHub URL field when
+  // PushResult.githubUrl is undefined (a non-github.com remote, or none
+  // configured) -- shown as a bare, unescaped-for-markup URL rather than an
+  // <a href> anchor: Telegram auto-links plain https:// URLs in HTML-mode
+  // text on its own, so there is no need for an anchor tag (and no risk of
+  // TelegramMessageSplitter ever having to split one in half, unlike <pre>).
+  private formatPushCompleted(repositoryId: string | undefined, result: PushResult): string {
+    const lines = [
+      this.field("Repository", this.code(repositoryId ?? "unknown")),
+      this.field("Remote", this.code(result.remote)),
+      this.field("Branch", this.code(result.branch)),
+      this.field("Commit Hash", this.code(result.headShortSha)),
+      "",
+      this.escapeHtml(result.headMessage),
+      "",
+      ...this.formatPushedCommitsSection(result.pushedCommits),
+      this.field(
+        "Remote Status",
+        `${this.code(`${result.remote}/${result.branch}`)} (ahead ${result.ahead}, behind ${result.behind})`,
+      ),
+    ];
+    if (result.githubUrl) {
+      lines.push(this.field("GitHub", this.escapeHtml(result.githubUrl)));
+    }
+    lines.push("", this.field("Timestamp", this.formatAbsoluteTimestamp(result.timestamp)));
+    return this.template("✅", "Push Successful", lines);
+  }
+
+  // A no-op push ("Everything up-to-date") is a normal, successful outcome,
+  // not an error -- rendered as "0 (already up to date)" rather than an
+  // empty, unexplained bullet list. Each pushed commit gets its own two-line
+  // entry (hash, then message) with a blank line between entries, matching
+  // the spec's own "• hash / message" example -- unlike every other bulleted
+  // list in this file (truncateBulletList), which is always one line per
+  // item.
+  private formatPushedCommitsSection(commits: CommitSummary[]): string[] {
+    if (commits.length === 0) {
+      return [this.field("Pushed Commits", "0 (already up to date)"), ""];
+    }
+
+    const shown = commits.slice(0, MAX_PUSHED_COMMITS_SHOWN);
+    const bullets = shown.flatMap((commit) => [`• ${this.code(commit.shortSha)}`, `  ${this.escapeHtml(commit.message)}`, ""]);
+    if (commits.length > MAX_PUSHED_COMMITS_SHOWN) {
+      bullets.push(`...and ${commits.length - MAX_PUSHED_COMMITS_SHOWN} more`, "");
+    }
+    return [this.field("Pushed Commits", String(commits.length)), "", ...bullets];
   }
 
   // Git History & Inspection System: /diff <hash> -- a structured per-file

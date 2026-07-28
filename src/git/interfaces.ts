@@ -102,6 +102,12 @@ export interface IGitAdapter {
   // undefined when no upstream is configured, or it's configured but no
   // longer resolves (its remote branch was deleted).
   upstreamRef(): Promise<string | undefined>;
+  // Commit and Push Result Messages (push-changes): same undefined cases as
+  // upstreamRef() above, but resolved to the upstream's own tip commit SHA
+  // rather than a ref name.
+  upstreamSha(): Promise<string | undefined>;
+  // undefined when no such remote is configured.
+  remoteUrl(remote: string): Promise<string | undefined>;
   stashCount(): Promise<number>;
   listWorktrees(): Promise<WorktreeInfo[]>;
   listSubmodules(): Promise<SubmoduleStatus[]>;
