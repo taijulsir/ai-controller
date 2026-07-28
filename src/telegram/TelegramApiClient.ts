@@ -1,9 +1,15 @@
 import type { IConfigService } from "../config/interfaces";
 import { buildTelegramApiUrl, LONG_POLL_TIMEOUT_SECONDS, TELEGRAM_MAX_MESSAGE_LENGTH } from "./TelegramConstants";
+import { stripHtml } from "./TelegramHtml";
 import { TelegramApiError } from "./errors";
 import type { ITelegramClient } from "./interfaces";
 import { splitMessageText } from "./TelegramMessageSplitter";
 import type { BotCommand, InlineKeyboardButton, OutgoingDocument, OutgoingMessage, TelegramUpdate } from "./types";
+
+// Telegram's own wording for a parse_mode: "HTML" message it couldn't
+// tokenize (unbalanced/unsupported tags). Matched case-insensitively since
+// it's free text in the API's error description, not a stable error code.
+const HTML_PARSE_ERROR_PATTERN = /can't parse entities/i;
 
 interface RawTelegramUpdate {
   update_id: number;
@@ -57,29 +63,47 @@ export class TelegramApiClient implements ITelegramClient {
     const { bot } = this.configService.getTelegramConfig();
     const url = buildTelegramApiUrl(bot.token, "sendMessage");
 
-    const response = await fetch(url, {
+    // ResponseFormatter now produces HTML (<b>/<code>/<pre>), escaping every
+    // externally-sourced value it interpolates -- see its own
+    // escapeHtml()/code() helpers -- and TelegramMessageSplitter never
+    // splits a chunk in the middle of an open tag. Telegram's "HTML" mode is
+    // used rather than MarkdownV2 specifically because it only requires
+    // escaping three characters (<, >, &), not MarkdownV2's much larger and
+    // easy-to-miss escape set, which would otherwise risk an entire message
+    // being rejected by a single unescaped character inside arbitrary
+    // Claude/git output.
+    const response = await this.postMessage(url, message, "HTML");
+    if (response.ok) {
+      return;
+    }
+
+    const body = await response.text();
+    if (response.status === 400 && HTML_PARSE_ERROR_PATTERN.test(body)) {
+      // Belt-and-suspenders: formatting is supposed to always produce valid,
+      // balanced HTML by construction, but if some future bug slips past
+      // that anyway, degrade to a readable plain-text message instead of
+      // surfacing an opaque 400 to the user.
+      const fallback = await this.postMessage(url, { ...message, text: stripHtml(message.text) }, undefined);
+      if (!fallback.ok) {
+        throw new TelegramApiError(fallback.status, await fallback.text());
+      }
+      return;
+    }
+
+    throw new TelegramApiError(response.status, body);
+  }
+
+  private async postMessage(url: string, message: OutgoingMessage, parseMode: "HTML" | undefined): Promise<Response> {
+    return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         chat_id: message.chatId,
         text: message.text,
-        // ResponseFormatter now produces HTML (<b>/<code>), escaping every
-        // externally-sourced value it interpolates -- see its own
-        // escapeHtml()/code() helpers. Telegram's "HTML" mode is used rather
-        // than MarkdownV2 specifically because it only requires escaping
-        // three characters (<, >, &), not MarkdownV2's much larger and
-        // easy-to-miss escape set, which would otherwise risk an entire
-        // message being rejected by a single unescaped character inside
-        // arbitrary Claude/git output.
-        parse_mode: "HTML",
+        ...(parseMode ? { parse_mode: parseMode } : {}),
         ...(message.inlineKeyboard ? { reply_markup: this.toReplyMarkup(message.inlineKeyboard) } : {}),
       }),
     });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new TelegramApiError(response.status, body);
-    }
   }
 
   // multipart/form-data via the Bot API's own sendDocument endpoint --

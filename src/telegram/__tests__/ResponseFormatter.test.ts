@@ -367,6 +367,62 @@ describe("ResponseFormatter: Working Tree Management", () => {
       expect(text).toContain("src/old.ts");
       expect(text).toContain("src/new.ts");
     });
+
+    // Regression coverage for the Telegram HTML parse error ("can't parse
+    // entities: Can't find end tag corresponding to start tag 'pre'"): any
+    // diff content must be escaped before landing inside the <pre> block,
+    // and the block itself must always come out with exactly one open and
+    // one close tag, no matter what the diff contains.
+    it("escapes <, >, and & in diff content so they can't be read as markup", () => {
+      const diff = "-if (a < b && b > c) {\n+if (a < b && c > d) { /* fixed */ }";
+      const result: WorkingTreeChangeDiff = { change: change(), diff };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+
+      expect(text).toContain("&lt;");
+      expect(text).toContain("&gt;");
+      expect(text).toContain("&amp;&amp;");
+      expect(text).not.toContain("a < b");
+      expect(text).not.toContain("b > c");
+    });
+
+    it("escapes a literal </pre> in diff content instead of closing the block early", () => {
+      const diff = "+ some text\n+</pre><script>alert(1)</script>\n+ more text";
+      const result: WorkingTreeChangeDiff = { change: change(), diff };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+
+      const opens = (text.match(/<pre>/g) ?? []).length;
+      const closes = (text.match(/<\/pre>/g) ?? []).length;
+      expect(opens).toBe(1);
+      expect(closes).toBe(1);
+      expect(text).toContain("&lt;/pre&gt;&lt;script&gt;");
+    });
+
+    it("escapes HTML-fragment-shaped diff content without breaking the pre block", () => {
+      const diff = '+<div class="foo" onclick="evil()">bar</div>\n+<img src=x onerror=alert(1)>';
+      const result: WorkingTreeChangeDiff = { change: change(), diff };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+
+      expect((text.match(/<pre>/g) ?? []).length).toBe(1);
+      expect((text.match(/<\/pre>/g) ?? []).length).toBe(1);
+      expect(text).not.toContain("<div");
+      expect(text).not.toContain("<img");
+    });
+
+    it("produces an always-balanced <pre> block for a normal diff", () => {
+      const result: WorkingTreeChangeDiff = { change: change(), diff: "@@ -1 +1 @@\n-old\n+new" };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+      expect((text.match(/<pre>/g) ?? []).length).toBe(1);
+      expect((text.match(/<\/pre>/g) ?? []).length).toBe(1);
+    });
+
+    it("produces an always-balanced result for a large, truncated diff", () => {
+      const bigDiff = Array.from({ length: 500 }, (_, i) => `+line ${i} with <tags> & ampersands`).join("\n");
+      const result: WorkingTreeChangeDiff = { change: change(), diff: bigDiff };
+      const text = formatter.formatWorkingTreeChangeDiff(result);
+      expect((text.match(/<pre>/g) ?? []).length).toBe(1);
+      expect((text.match(/<\/pre>/g) ?? []).length).toBe(1);
+      expect(text).toContain("&lt;tags&gt;");
+    });
   });
 
   describe("formatDiscardResult", () => {
